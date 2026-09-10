@@ -144,6 +144,18 @@ type Tab = "home" | "plan" | "ride" | "you";
 type RouteStatus =
   "draft" | "matching" | "ready" | "unavailable" | "trace_ready" | "failed";
 
+type AppAlertButton = {
+  text: string;
+  style?: "default" | "cancel" | "destructive";
+  onPress?: () => void;
+};
+
+type WebAlertState = {
+  title: string;
+  message: string;
+  buttons: AppAlertButton[];
+};
+
 const ROUTE_STORAGE_V1_KEY = "ridewind.bahrain.routes.v1";
 const ROUTE_STORAGE_V2_KEY = "ridewind.bahrain.routes.v2";
 const ACTIVITY_STORAGE_KEY = "ridewind.bahrain.activities.v1";
@@ -269,6 +281,7 @@ export default function App() {
     null,
   );
   const [routeMessage, setRouteMessage] = useState("");
+  const [webAlert, setWebAlert] = useState<WebAlertState | null>(null);
   const [conditions, setConditions] = useState<BahrainConditions | null>(null);
   const [refreshing, setRefreshing] = useState(true);
   const [departureOffset, setDepartureOffset] = useState(0);
@@ -305,6 +318,33 @@ export default function App() {
   );
   const uiText = (key: string, fallback: string) =>
     screenText(t, key, fallback);
+
+  const showAppAlert = (
+    title: string,
+    message: string,
+    buttons?: AppAlertButton[],
+  ) => {
+    if (Platform.OS !== "web") {
+      if (buttons) Alert.alert(title, message, buttons);
+      else Alert.alert(title, message);
+      return;
+    }
+
+    const webButtons = buttons?.length
+      ? buttons
+      : [{ text: t.done, style: "cancel" as const }];
+    setWebAlert({
+      title,
+      message,
+      buttons: webButtons.map((button) => ({
+        ...button,
+        onPress: () => {
+          setWebAlert(null);
+          button.onPress?.();
+        },
+      })),
+    });
+  };
 
   const catalogRecords = useMemo(
     () =>
@@ -524,7 +564,7 @@ export default function App() {
     commitPreferences({ language: next });
   const updateTheme = (next: "light" | "dark") =>
     commitPreferences({ theme: next });
-  const openPrivacy = () => Alert.alert(t.privacySources, t.privacyCopy);
+  const openPrivacy = () => showAppAlert(t.privacySources, t.privacyCopy);
   const requestLocationPermission = async () => {
     try {
       const result = await Location.requestForegroundPermissionsAsync();
@@ -554,7 +594,7 @@ export default function App() {
       2,
     );
     if (!FileSystem.cacheDirectory || !(await Sharing.isAvailableAsync())) {
-      Alert.alert(
+      showAppAlert(
         t.privacySources,
         uiText(
           "exportUnavailable",
@@ -1596,7 +1636,7 @@ export default function App() {
   };
   const discardCompletion = () => {
     if (!completionDraftView) return;
-    Alert.alert(t.discardRide, t.discardRideConfirm, [
+    showAppAlert(t.discardRide, t.discardRideConfirm, [
       { text: t.cancel, style: "cancel" },
       {
         text: t.discardRide,
@@ -1611,7 +1651,7 @@ export default function App() {
     const payload = JSON.stringify(completionDraftView, null, 2);
     try {
       if (!FileSystem.cacheDirectory || !(await Sharing.isAvailableAsync())) {
-        Alert.alert(
+        showAppAlert(
           t.exportRide,
           uiText(
             "exportUnavailable",
@@ -1632,7 +1672,7 @@ export default function App() {
       setCompletionDraftView(exported);
       if (exported.completionState === "saved") await writeActivity(exported);
     } catch {
-      Alert.alert(t.exportRide, t.saveFailed);
+      showAppAlert(t.exportRide, t.saveFailed);
     }
   };
 
@@ -1939,23 +1979,31 @@ export default function App() {
   if (!preferencesHydrated) return <BootScreen palette={palette} rtl={rtl} />;
   if (!preferences.onboardingComplete || editingOnboarding)
     return (
-      <Onboarding
-        palette={palette}
-        language={language}
-        rtl={rtl}
-        initialData={{
-          displayName: preferences.displayName,
-          experience: preferences.experience,
-          goals: preferences.goals,
-          preferredWindow: preferences.preferredWindow,
-          windPreference: preferences.windPreference,
-          distanceUnit: preferences.distanceUnit,
-          privacyAcknowledged: preferences.locationExplainerSeen,
-        }}
-        onComplete={(data) => void saveOnboarding(data)}
-        onSkip={(data) => void saveOnboarding(data, true)}
-        onOpenPrivacy={openPrivacy}
-      />
+      <View style={webAlertStyles.host}>
+        <Onboarding
+          palette={palette}
+          language={language}
+          rtl={rtl}
+          initialData={{
+            displayName: preferences.displayName,
+            experience: preferences.experience,
+            goals: preferences.goals,
+            preferredWindow: preferences.preferredWindow,
+            windPreference: preferences.windPreference,
+            distanceUnit: preferences.distanceUnit,
+            privacyAcknowledged: preferences.locationExplainerSeen,
+          }}
+          onComplete={(data) => void saveOnboarding(data)}
+          onSkip={(data) => void saveOnboarding(data, true)}
+          onOpenPrivacy={openPrivacy}
+        />
+        <WebAppAlert
+          alert={webAlert}
+          palette={palette}
+          rtl={rtl}
+          onDismiss={() => setWebAlert(null)}
+        />
+      </View>
     );
 
   const content = settingsOpen ? (
@@ -2309,7 +2357,7 @@ export default function App() {
       onOpenRoute={(item) => openRouteDetail(item.route)}
       onConnectionAction={() => {
         setStravaMessage(t.stravaNotConfigured);
-        Alert.alert(t.connectStrava, t.stravaNotConfigured);
+        showAppAlert(t.connectStrava, t.stravaNotConfigured);
       }}
       onPrivacyAction={openPrivacy}
       onSettingsAction={() => setSettingsOpen(true)}
@@ -2371,9 +2419,182 @@ export default function App() {
           </View>
         )}
       </View>
+      <WebAppAlert
+        alert={webAlert}
+        palette={palette}
+        rtl={rtl}
+        onDismiss={() => setWebAlert(null)}
+      />
     </SafeAreaView>
   );
 }
+
+function WebAppAlert({
+  alert: webAlert,
+  palette,
+  rtl,
+  onDismiss,
+}: {
+  alert: WebAlertState | null;
+  palette: Palette;
+  rtl: boolean;
+  onDismiss: () => void;
+}) {
+  if (Platform.OS !== "web" || !webAlert) return null;
+
+  const confirmation = webAlert.buttons.length > 1;
+  const handleButtonPress = (button: AppAlertButton) => {
+    onDismiss();
+    button.onPress?.();
+  };
+
+  return (
+    <View style={webAlertStyles.backdrop}>
+      <View
+        testID="web-app-alert"
+        role={confirmation ? "alertdialog" : "alert"}
+        accessibilityLiveRegion="assertive"
+        accessibilityViewIsModal
+        accessibilityLabel={`${webAlert.title}. ${webAlert.message}`}
+        aria-modal={true}
+        style={[
+          webAlertStyles.card,
+          { backgroundColor: palette.bg, borderColor: palette.line },
+          rtl && webAlertStyles.rtl,
+        ]}
+      >
+        <Text
+          accessibilityRole="header"
+          style={[
+            webAlertStyles.title,
+            { color: palette.ink },
+            rtl && webAlertStyles.textRight,
+            rtl && { fontFamily: FONT_ARABIC_BOLD },
+          ]}
+        >
+          {webAlert.title}
+        </Text>
+        <Text
+          style={[
+            webAlertStyles.message,
+            { color: palette.muted },
+            rtl && webAlertStyles.textRight,
+            rtl && { fontFamily: FONT_ARABIC_REGULAR },
+          ]}
+        >
+          {webAlert.message}
+        </Text>
+        <View
+          style={[webAlertStyles.actions, rtl && webAlertStyles.rtl]}
+        >
+          {webAlert.buttons.map((button) => {
+            const destructive = button.style === "destructive";
+            const cancel = button.style === "cancel";
+            return (
+              <Pressable
+                key={button.text}
+                accessibilityRole="button"
+                accessibilityLabel={button.text}
+                onPress={() => handleButtonPress(button)}
+                style={({ pressed }) => [
+                  webAlertStyles.action,
+                  {
+                    backgroundColor: destructive
+                      ? palette.cautionSoft
+                      : cancel
+                        ? palette.bg
+                        : palette.ink,
+                    borderColor: destructive
+                      ? palette.caution
+                      : cancel
+                        ? palette.line
+                        : palette.ink,
+                    opacity: pressed ? 0.78 : 1,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    webAlertStyles.actionText,
+                    {
+                      color: destructive
+                        ? palette.caution
+                        : cancel
+                          ? palette.ink
+                          : palette.bg,
+                    },
+                    rtl && { fontFamily: FONT_ARABIC_BOLD },
+                  ]}
+                >
+                  {button.text}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const webAlertStyles = StyleSheet.create({
+  host: { flex: 1 },
+  backdrop: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 1000,
+    elevation: 1000,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    backgroundColor: "rgba(16, 42, 46, 0.72)",
+  },
+  card: {
+    width: "100%",
+    maxWidth: 520,
+    gap: 14,
+    padding: 20,
+    borderWidth: 1,
+    borderRadius: 22,
+  },
+  title: {
+    fontFamily: FONT_BOLD,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: "900",
+  },
+  message: {
+    fontFamily: FONT_REGULAR,
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  actions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 4,
+  },
+  action: {
+    minHeight: 48,
+    minWidth: 96,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionText: {
+    fontFamily: FONT_BOLD,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  rtl: { flexDirection: "row-reverse" },
+  textRight: { textAlign: "right" },
+});
 
 function viewForRecord(
   record: RouteRecord,
