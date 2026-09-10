@@ -1,5 +1,5 @@
 import { useRef, useState, type RefObject } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { MapPreview } from "../MapPreview";
 import { RouteLayerLegend } from "../RouteLayerLegend";
 import { NoticeAlert, StatusBadge } from "../UiPatterns";
@@ -185,6 +185,61 @@ export function RoutesScreen({
         }
       : route,
   );
+
+  if (manualMode) {
+    return (
+      <View
+        style={[styles.screen, styles.manualScreen, rtl && styles.screenRtl]}
+      >
+        <View style={styles.manualMapViewport}>
+          {preview ? (
+            <MapPreview
+              route={asCanonicalRoute(preview)!}
+              fullScreen
+              rtl={rtl}
+              onMapPress={onMapPress}
+              roadLabels={roadLabels}
+              mapText={{
+                ...mapText,
+                mapLabel: previewMapLabel,
+                status: mapStatus,
+                statusPilot: tx(t, "straightLine", "Straight line"),
+              }}
+            />
+          ) : (
+            <EmptyBuilderMap
+              palette={palette}
+              t={t}
+              rtl={rtl}
+              onMapPress={onMapPress}
+            />
+          )}
+        </View>
+        <ScrollView
+          style={styles.manualControlTray}
+          contentContainerStyle={styles.manualControlTrayContent}
+          showsVerticalScrollIndicator
+          keyboardShouldPersistTaps="handled"
+        >
+          <ManualPanel
+            t={t}
+            rtl={rtl}
+            styles={styles}
+            formatNumber={formatNumber}
+            points={manualPoints}
+            onUndo={onUndoManual}
+            onRedo={onRedoManual}
+            onClear={onClearManual}
+            onDone={onDoneManual}
+            onCancel={onCancelManual}
+            onRemove={onRemoveManualPoint}
+            onMove={onMoveManualPoint}
+          />
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.screen, rtl && styles.screenRtl]}>
       <View style={styles.pageIntro}>
