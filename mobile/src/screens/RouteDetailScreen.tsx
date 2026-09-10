@@ -40,6 +40,8 @@ export function RouteDetailScreen({
   entryActionsEnabled = true,
   onStartAtEntry,
   onConnectFromLocation,
+  onRetry,
+  onEdit,
 }: RouteDetailScreenProps) {
   const [expanded, setExpanded] = useState(false);
   const canonical = asCanonicalRoute(route);
@@ -78,7 +80,7 @@ export function RouteDetailScreen({
       ? tx(t, "matchingRoads", "Finding a road route…")
       : routeStatus === "unavailable"
         ? tx(t, "routeUnavailable", "Road match unavailable")
-        : catalogPreview
+        : catalogPreview && !navigable
           ? tx(
               t,
               "routeCheckPending",
@@ -180,17 +182,43 @@ export function RouteDetailScreen({
             )}
         </Text>
         {routeStatus === "unavailable" && (
-          <View style={styles.alert} accessibilityRole="alert">
-            <Text style={[styles.alertTitle, rtl && styles.textRight]}>
-              {status}
-            </Text>
-            <Text style={[styles.alertText, rtl && styles.textRight]}>
-              {tx(
-                t,
-                "routeMatchFailure",
-                "We couldn't match these points to roads. Move a point or try again.",
+          <View style={styles.atlasActions}>
+            <View style={styles.alert} accessibilityRole="alert">
+              <Text style={[styles.alertTitle, rtl && styles.textRight]}>
+                {status}
+              </Text>
+              <Text style={[styles.alertText, rtl && styles.textRight]}>
+                {tx(
+                  t,
+                  "routeMatchFailure",
+                  "We couldn't match these points to roads. Move a point or try again.",
+                )}
+              </Text>
+            </View>
+            <View style={[styles.atlasActions, rtl && styles.rowRtl]}>
+              {onRetry && (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={onRetry}
+                  style={styles.primary}
+                >
+                  <Text style={styles.primaryText}>
+                    {tx(t, "retry", "Try again")}
+                  </Text>
+                </Pressable>
               )}
-            </Text>
+              {onEdit && (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={onEdit}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryText}>
+                    {tx(t, "editPoints", "Change points")}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
           </View>
         )}
         {expanded && (
@@ -319,7 +347,7 @@ export function RouteDetailScreen({
               </Pressable>
             </View>
           )
-        ) : (
+        ) : navigable ? (
           <Pressable
             accessibilityRole="button"
             onPress={onUse}
@@ -329,6 +357,14 @@ export function RouteDetailScreen({
               {tx(t, "useRoute", "Use this route")}
             </Text>
           </Pressable>
+        ) : (
+          <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+            {tx(
+              t,
+              "routeReviewPending",
+              "Review is still in progress. You can use this route when a road route is ready.",
+            )}
+          </Text>
         )}
       </View>
     </View>

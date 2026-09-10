@@ -620,6 +620,12 @@ function KnownRouteCard({
       : variant.label
     : tx(t, "onlyVariant", "Only supplied variant");
   const canStartAtEntry = family.status === "ready";
+  const knownMapStatus =
+    family.status === "ready"
+      ? ("matched" as const)
+      : family.status === "matching"
+        ? ("loading" as const)
+        : ("pilot" as const);
   return (
     <View
       style={styles.panel}
@@ -642,12 +648,16 @@ function KnownRouteCard({
           </Text>
         </View>
         <StatusBadge
-          label={tx(
-            t,
-            "routeCheckPending",
-            "Route preview · road check not complete",
-          )}
-          tone="warning"
+          label={
+            family.status === "ready"
+              ? tx(t, "roadMatched", "Road route ready")
+              : tx(
+                  t,
+                  "routeCheckPending",
+                  "Route preview · road check not complete",
+                )
+          }
+          tone={family.status === "ready" ? "success" : "warning"}
           palette={palette}
         />
       </View>
@@ -659,7 +669,7 @@ function KnownRouteCard({
         roadLabels={roadLabels}
         mapText={{
           ...mapText,
-          status: "pilot",
+          status: knownMapStatus,
           statusPilot: tx(t, "routePreviewLabel", "Route preview"),
         }}
       />

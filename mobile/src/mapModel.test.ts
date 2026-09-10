@@ -64,6 +64,21 @@ test('recorded geometry stays a dashed preview even when it has coordinates', ()
   assert.deepEqual(mapMarkerPoints(route)[0]?.coordinate, route.points[0]);
 });
 
+test('non-ready road geometry cannot render as a solid route', () => {
+  const route = {
+    ...baseRoute,
+    geometry: [
+      { latitude: 26.2, longitude: 50.6 },
+      { latitude: 26.22, longitude: 50.61 },
+    ],
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'matching' as const,
+  };
+
+  assert.equal(mapLineModel(route, 'matched').roadMatched, false);
+  assert.equal(mapLineModel(route, 'matched').status, 'pilot');
+});
+
 test('loop markers represent the shared start and finish once', () => {
   const markers = mapMarkerPoints(baseRoute, baseRoute.points, false, 8);
   const startCoordinate = baseRoute.points[0];

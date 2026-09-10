@@ -19,6 +19,7 @@ export type MapLineModel = {
 
 type RouteWithGeometryMetadata = RoutePlan & {
   geometryKind?: 'road_matched' | 'recorded_trace' | 'waypoint_trace' | 'none';
+  geometryStatus?: 'draft' | 'matching' | 'ready' | 'unavailable';
 };
 
 /** Dense geometry is the only road-following line the map is allowed to draw. */
@@ -120,8 +121,10 @@ export function mapMarkerPoints(
 }
 
 function hasRoadMatchedGeometry(route: RoutePlan) {
-  const kind = (route as RouteWithGeometryMetadata).geometryKind;
-  return Boolean(route.geometry?.length) && (kind === undefined || kind === 'road_matched');
+  const metadata = route as RouteWithGeometryMetadata;
+  return Boolean(route.geometry?.length) &&
+    (metadata.geometryKind === undefined || metadata.geometryKind === 'road_matched') &&
+    (metadata.geometryStatus === undefined || metadata.geometryStatus === 'ready');
 }
 
 function sampleIndexes(length: number, maximum: number) {
