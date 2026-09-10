@@ -62,6 +62,13 @@ export function MapPreview({
   const { linePoints, roadMatched } = lineModel;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
   const focusSegment = normalizeSelectedSegment(selectedSegment);
+  const roadLabelFor = (kind: RoadKind) =>
+    roadLabels?.[kind] ??
+    (kind === "unknown"
+      ? rtl
+        ? "لا تتوفر أدلة طرق"
+        : "Road evidence unavailable"
+      : LABELS[kind]);
   const coordinates = linePoints.map(({ latitude, longitude }) => ({
     latitude,
     longitude,
@@ -185,9 +192,7 @@ export function MapPreview({
           : entry.isEnd
             ? text.destinationPoint
             : `${text.waypoint} ${pointIndex}`;
-    const roadLabel =
-      roadLabels?.[entry.routePoint.suitability.kind] ??
-      LABELS[entry.routePoint.suitability.kind];
+    const roadLabel = roadLabelFor(entry.routePoint.suitability.kind);
     const distance = text.formatNumber
       ? text.formatNumber(entry.routePoint.distanceKm, {
           minimumFractionDigits: 1,
@@ -197,7 +202,7 @@ export function MapPreview({
     const pointName = rtl
       ? (entry.routePoint.nameAr ?? entry.routePoint.name)
       : entry.routePoint.name;
-    return `${positionLabel}: ${pointName}; ${distance} ${text.distanceUnit}; ${roadLabel}; ${entry.routePoint.suitability.source}`;
+    return `${positionLabel}: ${pointName}; ${distance} ${text.distanceUnit}; ${roadLabel}`;
   };
   const pointLabels = markerEntries.map(pointLabel);
   const accessiblePointLabels = pointLabels;
@@ -293,7 +298,7 @@ export function MapPreview({
                     ? (entry.routePoint.nameAr ?? entry.routePoint.name)
                     : entry.routePoint.name
               }
-              description={`${roadLabels?.[entry.routePoint.suitability.kind] ?? LABELS[entry.routePoint.suitability.kind]} · ${entry.routePoint.suitability.source}`}
+              description={roadLabelFor(entry.routePoint.suitability.kind)}
             >
               <View
                 accessible={false}
@@ -450,14 +455,14 @@ export function MapPreview({
                 key={kind}
                 accessible
                 accessibilityRole="text"
-                accessibilityLabel={roadLabels?.[kind] ?? LABELS[kind]}
+                accessibilityLabel={roadLabelFor(kind)}
                 style={styles.legendItem}
               >
                 <View
                   style={[styles.legendDot, { backgroundColor: COLORS[kind] }]}
                 />
                 <Text style={[styles.legendText, rtl && styles.arabicMeta]}>
-                  {roadLabels?.[kind] ?? LABELS[kind]}
+                  {roadLabelFor(kind)}
                 </Text>
               </View>
             ),
