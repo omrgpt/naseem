@@ -41,7 +41,10 @@ export function RouteDetailScreen({
   onStartAtEntry,
   onConnectFromLocation,
   onRetry,
+  onAddStop,
+  onReverse,
   onEdit,
+  onSave,
 }: RouteDetailScreenProps) {
   const [expanded, setExpanded] = useState(false);
   const canonical = asCanonicalRoute(route);
@@ -303,6 +306,52 @@ export function RouteDetailScreen({
                   {tx(t, "recordedTrack", "Recorded track")}
                 </Text>
               )}
+            {routeStatus !== "unavailable" && (
+              <View style={[styles.manualActions, rtl && styles.rowRtl]}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={tx(t, "addStop", "Add stop")}
+                  onPress={onAddStop}
+                  style={styles.smallButton}
+                >
+                  <Text style={styles.smallButtonText}>
+                    {tx(t, "addStop", "Add stop")}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={tx(t, "reverse", "Reverse")}
+                  onPress={onReverse}
+                  style={styles.smallButton}
+                >
+                  <Text style={styles.smallButtonText}>
+                    {tx(t, "reverse", "Reverse")}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={tx(t, "editPoints", "Edit points")}
+                  onPress={onEdit}
+                  style={styles.smallButton}
+                >
+                  <Text style={styles.smallButtonText}>
+                    {tx(t, "editPoints", "Edit points")}
+                  </Text>
+                </Pressable>
+                {onSave && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={tx(t, "saveRoute", "Save route")}
+                    onPress={onSave}
+                    style={styles.smallButton}
+                  >
+                    <Text style={styles.smallButtonText}>
+                      {tx(t, "saveRoute", "Save route")}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
           </View>
         )}
         {catalogPreview ? (
