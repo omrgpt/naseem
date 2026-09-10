@@ -69,6 +69,7 @@ export type LiveRideSessionMessages = {
   roadMatchedRequired: string;
   liveEnded: string;
   recordingEnded: string;
+  locationUpdatesStopped: string;
 };
 
 export type LiveRideSession = {
@@ -159,6 +160,9 @@ export function useLiveRideSession({
     messages?.liveEnded ?? "Live ride ended. Location is off.";
   const recordingEndedMessage =
     messages?.recordingEnded ?? "Recording-only ride ended. Location is off.";
+  const locationUpdatesStoppedMessage =
+    messages?.locationUpdatesStopped ??
+    "Location updates stopped. Your recording is still here; retry access or end the ride to save it.";
   const [state, setState] = useState<LiveRideSessionState>(
     route || recordingOnly ? "ready" : "no-route",
   );
@@ -349,7 +353,7 @@ export function useLiveRideSession({
           setPermission("denied");
           setState("permission-denied");
           setStatusMessage(
-            "Location updates stopped. Your recording is still here; retry access or end the ride to save it.",
+            locationUpdatesStoppedMessage,
           );
         }
       });
@@ -367,6 +371,7 @@ export function useLiveRideSession({
     permissionDeniedRecoveryMessage,
     recordingActiveMessage,
     recordingOnly,
+    locationUpdatesStoppedMessage,
     state,
   ]);
 

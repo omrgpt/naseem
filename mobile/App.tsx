@@ -18,7 +18,7 @@ import {
   NotoSansArabic_600SemiBold,
   NotoSansArabic_700Bold,
 } from "@expo-google-fonts/noto-sans-arabic";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Linking,
@@ -596,6 +596,23 @@ export default function App() {
       /\s(?=(?:AM|PM|ص|م)$)/,
       "\u00a0",
     );
+  const liveFormatDistance = useCallback(
+    (value: number) =>
+      `${formatNumber(value, locale, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      })} ${t.km}`,
+    [locale, t.km],
+  );
+  const liveFormatTime = useCallback(
+    (instant: string) => formatAppTime(instant),
+    [hour12, locale],
+  );
+  const liveFormatAccuracy = useCallback(
+    (value: number) =>
+      `${formatNumber(value, locale, { maximumFractionDigits: 0 })} ${t.meters}`,
+    [locale, t.meters],
+  );
   const departureLabel = formatAppTime(departureAt);
   const departureChoices = [-20, 0, 20].map((value) => ({
     value,
@@ -1479,16 +1496,18 @@ export default function App() {
       roadMatchedRequired: t.liveRoadMatchedRequired,
       liveEnded: t.liveEnded,
       recordingEnded: t.recordingOnlyEnded,
+      locationUpdatesStopped: uiText(
+        "locationUpdatesStopped",
+        "Location updates stopped. Your recording is still here; retry access or end the ride to save it.",
+      ),
     },
     analysisKey: rideRecordForHook
       ? routeAnalysisKey(rideRecordForHook, departureAt)
       : undefined,
     policy: DEFAULT_WAYPOINT_TRACE_LIVE_RIDE_POLICY,
-    formatDistance: (value) =>
-      `${formatNumber(value, locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${t.km}`,
-    formatTime: (instant) => formatAppTime(instant),
-    formatAccuracy: (value) =>
-      `${formatNumber(value, locale, { maximumFractionDigits: 0 })} ${t.meters}`,
+    formatDistance: liveFormatDistance,
+    formatTime: liveFormatTime,
+    formatAccuracy: liveFormatAccuracy,
     onPosition: undefined,
   });
   useEffect(() => {
