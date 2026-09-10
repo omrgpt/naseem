@@ -118,7 +118,6 @@
 - Modify: `mobile/src/activityRepository.ts`
 - Test: `mobile/src/rideRecording.test.ts`
 - Test: `mobile/src/activityRepository.test.ts`
-- Test: `mobile/src/appIntegration.test.ts` only for ride-state helpers that do not require `App.tsx`
 
 **Interfaces:** Preserve the existing watcher/session hook API used by App. Return explicit states for ready, explanation, requesting, active, denied, unavailable, ending, completed draft, save failed, saved, discarded, and exported.
 
