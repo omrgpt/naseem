@@ -1142,6 +1142,7 @@ function ReviewCard({
         </View>
         <StatusBadge label={chip} tone="warning" palette={palette} />
       </View>
+      <MapPreview route={route} fullScreen minimal rtl={rtl} />
       <Text style={[styles.fieldHint, rtl && styles.textRight]}>
         {kind === "recorded_trace"
           ? tx(
