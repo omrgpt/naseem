@@ -45,7 +45,9 @@ export type MapPreviewProps = {
   minimal?: boolean;
   selectedSegment?: number;
   rtl?: boolean;
+  /** Enables the renderer-owned center control when paired with a coordinate. */
   showUserLocation?: boolean;
+  /** Renderers use this supplied value only; they never request location here. */
   userCoordinate?: Coordinate;
   onReset?: () => void;
   onMapPress?: (coordinate: Coordinate) => void;

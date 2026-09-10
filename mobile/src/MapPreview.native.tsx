@@ -3,7 +3,11 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polyline, type Region } from "react-native-maps";
 import type { Coordinate, RoadKind } from "./domain";
 import type { MapPreviewProps, MapText } from "./MapPreview";
-import { shouldShowMinimalMapControls } from "./mapPreviewContract";
+import {
+  hasFiniteCoordinate,
+  shouldShowMinimalMapControls,
+  shouldShowUserLocationControl,
+} from "./mapPreviewContract";
 import {
   mapIsLoop,
   mapLineModel,
@@ -50,6 +54,10 @@ export function MapPreview({
   mapText,
 }: Props) {
   const mapRef = useRef<MapView>(null);
+  const showUserLocationControl = shouldShowUserLocationControl(
+    showUserLocation,
+    userCoordinate,
+  );
   const lineModel = mapLineModel(route, mapText?.status);
   const { linePoints, roadMatched } = lineModel;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
@@ -82,6 +90,16 @@ export function MapPreview({
   const reset = () => {
     fitToRoute();
     onReset?.();
+  };
+  const centerOnUserLocation = () => {
+    if (!showUserLocationControl || !hasFiniteCoordinate(userCoordinate)) return;
+    const next = {
+      ...regionRef.current,
+      latitude: userCoordinate.latitude,
+      longitude: userCoordinate.longitude,
+    };
+    regionRef.current = next;
+    mapRef.current?.animateToRegion(next, 220);
   };
   const adjustZoom = (factor: number) => {
     const current = regionRef.current;
@@ -204,7 +222,7 @@ export function MapPreview({
         showsCompass
         showsScale
         showsUserLocation={showUserLocation}
-        showsMyLocationButton={showUserLocation}
+        showsMyLocationButton={false}
         zoomEnabled
         scrollEnabled
         zoomTapEnabled
@@ -294,7 +312,7 @@ export function MapPreview({
             </Marker>
           );
         })}
-        {userCoordinate && (
+        {hasFiniteCoordinate(userCoordinate) && (
           <Marker
             coordinate={userCoordinate}
             anchor={{ x: 0.5, y: 0.5 }}
@@ -377,6 +395,19 @@ export function MapPreview({
             {text.providerUnavailable}
           </Text>
         </View>
+      )}
+      {showUserLocationControl && (
+        <Pressable
+          testID="map-center-user-location"
+          accessibilityRole="button"
+          accessibilityLabel={text.userLocation}
+          onPress={centerOnUserLocation}
+          style={styles.currentLocationButton}
+        >
+          <View accessible={false} style={styles.currentLocationIcon}>
+            <View style={styles.currentLocationIconCore} />
+          </View>
+        </Pressable>
       )}
       {!compact && !minimal && (
         <View
@@ -555,6 +586,35 @@ const styles = StyleSheet.create({
     backgroundColor: "#3778F5",
     borderWidth: 3,
     borderColor: "#FFFFFF",
+  },
+  currentLocationButton: {
+    position: "absolute",
+    top: 64,
+    insetInlineStart: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.97)",
+    borderWidth: 1,
+    borderColor: "#C9D9DB",
+    zIndex: 5,
+  },
+  currentLocationIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#102A2E",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  currentLocationIconCore: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#3778F5",
   },
   minimalFit: {
     minHeight: 44,

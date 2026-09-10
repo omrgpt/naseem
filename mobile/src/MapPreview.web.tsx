@@ -20,7 +20,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Svg, { Polyline as SvgPolyline } from "react-native-svg";
 import type { Coordinate, RoadKind, RoutePlan } from "./domain";
 import type { MapPreviewProps } from "./MapPreview";
-import { shouldShowMinimalMapControls } from "./mapPreviewContract";
+import {
+  hasFiniteCoordinate,
+  shouldShowMinimalMapControls,
+  shouldShowUserLocationControl,
+} from "./mapPreviewContract";
 import {
   mapIsLoop,
   mapLineModel,
@@ -56,6 +60,7 @@ export function MapPreview({
   minimal = false,
   selectedSegment,
   rtl = false,
+  showUserLocation = false,
   onReset,
   onMapPress,
   userCoordinate,
@@ -72,6 +77,8 @@ export function MapPreview({
   const geometryKey = linePoints
     .map(({ latitude, longitude }) => `${latitude},${longitude}`)
     .join("|");
+  const routeCenter = centerOf(linePoints);
+  const [mapCenter, setMapCenter] = useState(routeCenter);
   const [zoomOffset, setZoomOffset] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panRef = useRef(pan);
@@ -88,7 +95,7 @@ export function MapPreview({
     9,
     Math.min(16, fitZoom(linePoints, width, height) + zoomOffset),
   );
-  const center = centerOf(linePoints);
+  const center = mapCenter;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
   const centerWorld = project(center, zoom);
   const centerTileX = Math.floor(centerWorld.x / 256);
@@ -108,7 +115,7 @@ export function MapPreview({
     toPosition(point, zoom, centerWorld, width, height, pan),
   );
   const linePaths = buildLinePaths(linePoints, linePositions, route);
-  const userPosition = userCoordinate
+  const userPosition = hasFiniteCoordinate(userCoordinate)
     ? toPosition(userCoordinate, zoom, centerWorld, width, height, pan)
     : undefined;
   const tiles: Array<{ x: number; y: number; left: number; top: number }> = [];
@@ -168,6 +175,10 @@ export function MapPreview({
     ...mapText,
   };
   const showMinimalControls = shouldShowMinimalMapControls(compact, minimal);
+  const showUserLocationControl = shouldShowUserLocationControl(
+    showUserLocation,
+    userCoordinate,
+  );
   const isLoopRoute = mapIsLoop(route);
   const mapStatusLabel =
     mapStatus === "matched"
@@ -284,6 +295,7 @@ export function MapPreview({
     );
   };
   useEffect(() => {
+    setMapCenter(routeCenter);
     setPan({ x: 0, y: 0 });
     setZoomOffset(0);
     setTileUnavailable(false);
@@ -294,7 +306,16 @@ export function MapPreview({
       }
     };
   }, [route.id, route.revisionId, geometryKey]);
+  const centerOnUserLocation = () => {
+    if (!showUserLocationControl || !hasFiniteCoordinate(userCoordinate)) return;
+    setMapCenter({
+      latitude: userCoordinate.latitude,
+      longitude: userCoordinate.longitude,
+    });
+    setPan({ x: 0, y: 0 });
+  };
   const reset = () => {
+    setMapCenter(routeCenter);
     setZoomOffset(0);
     setPan({ x: 0, y: 0 });
     onReset?.();
@@ -567,6 +588,24 @@ export function MapPreview({
           )}
         </View>
       </View>
+      {showUserLocationControl && (
+        <Pressable
+          testID="map-center-user-location"
+          accessibilityRole="button"
+          accessibilityLabel={text.userLocation}
+          aria-label={text.userLocation}
+          onPress={centerOnUserLocation}
+          style={styles.currentLocationButton}
+        >
+          <View
+            accessible={false}
+            style={styles.currentLocationIcon}
+            pointerEvents="none"
+          >
+            <View style={styles.currentLocationIconCore} />
+          </View>
+        </Pressable>
+      )}
       {!minimal && (
         <View
           style={[styles.mapHeader, rtl && styles.overlayRtl]}
@@ -962,6 +1001,35 @@ const styles = StyleSheet.create({
     backgroundColor: "#3778F5",
     borderWidth: 3,
     borderColor: "#FFFFFF",
+  },
+  currentLocationButton: {
+    position: "absolute",
+    top: 64,
+    insetInlineStart: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.97)",
+    borderWidth: 1,
+    borderColor: "#C9D9DB",
+    zIndex: 5,
+  },
+  currentLocationIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#102A2E",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  currentLocationIconCore: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#3778F5",
   },
   startMarker: { backgroundColor: "#A94B31" },
   loopMarker: { minWidth: 30, borderRadius: 15 },
