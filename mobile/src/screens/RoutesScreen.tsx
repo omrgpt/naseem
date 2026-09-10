@@ -306,7 +306,7 @@ export function RoutesScreen({
             t={t}
             label={tx(t, "start", "Start")}
             value={startText}
-            placeholder={tx(t, "searchStart", "Search or choose a start")}
+            placeholder={tx(t, "searchStart", "Name a start or choose a point")}
             focused={activeField === "start"}
             rtl={rtl}
             styles={styles}
@@ -323,7 +323,7 @@ export function RoutesScreen({
             placeholder={tx(
               t,
               "searchDestination",
-              "Search or choose a destination",
+              "Name a destination or choose a point",
             )}
             focused={activeField === "destination"}
             autoFocus={builder.status === "start-selected"}
@@ -917,6 +917,13 @@ function LocationField({
           </Text>
         </Pressable>
       </View>
+      <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+        {tx(
+          t,
+          "plannerFieldHint",
+          "Name a point or choose it: on the map, from your current location, or from a saved point. Typing does not search places.",
+        )}
+      </Text>
     </View>
   );
 }

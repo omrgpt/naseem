@@ -137,6 +137,18 @@ test("Arabic map labels and units are localized for RTL presentation", () => {
   assert.equal(catalogs.ar.minutes, "دقيقة");
 });
 
+test("planner fields do not promise unavailable place search", () => {
+  assert.doesNotMatch(catalogs.en.searchStart, /search/iu);
+  assert.doesNotMatch(catalogs.en.searchDestination, /search/iu);
+  assert.match(catalogs.en.plannerFieldHint, /current location/iu);
+  assert.match(catalogs.en.plannerFieldHint, /saved point/iu);
+  assert.match(catalogs.en.plannerFieldHint, /does not search/iu);
+  assert.match(catalogs.ar.plannerFieldHint, /الخريطة/u);
+  assert.match(catalogs.ar.plannerFieldHint, /موقعك الحالي/u);
+  assert.match(catalogs.ar.plannerFieldHint, /مكان محفوظ/u);
+  assert.match(catalogs.ar.plannerFieldHint, /لا تبحث/u);
+});
+
 test("language metadata keeps Bahrain locale and reading direction aligned", () => {
   assert.equal(localeForLanguage("en"), "en-BH");
   assert.equal(localeForLanguage("ar"), "ar-BH");

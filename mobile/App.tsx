@@ -1043,17 +1043,16 @@ export default function App() {
   const updatePlannerText = (field: "start" | "destination", value: string) => {
     if (field === "start") setStartText(value);
     else setDestinationText(value);
-    if (!value.trim()) {
-      const start = field === "start" ? null : builder.start;
-      const destination = field === "destination" ? null : builder.destination;
-      setBuilder({
-        status: start ? "start-selected" : "empty",
-        start,
-        destination,
-        route: null,
-      });
-      setActiveField(field);
-    }
+    matchingToken.current += 1;
+    const start = field === "start" ? null : builder.start;
+    const destination = field === "destination" ? null : builder.destination;
+    setBuilder({
+      status: start ? "start-selected" : "empty",
+      start,
+      destination,
+      route: null,
+    });
+    setActiveField(field);
   };
   const mapPlannerPress = (coordinate: Coordinate) => {
     if (manualMode) {
@@ -3162,7 +3161,7 @@ function createShellStyles(palette: Palette, rtl: boolean) {
     },
     scroll: { flex: 1 },
     surface: { flex: 1, minHeight: 0, width: "100%" },
-    content: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 16 },
+    content: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 128 },
     topbar: {
       minHeight: 67,
       paddingHorizontal: 16,
