@@ -219,7 +219,6 @@
 - Modify: `mobile/src/Onboarding.tsx`
 - Modify: `mobile/src/i18n.ts`
 - Modify: `mobile/src/fonts.ts`
-- Modify: `mobile/src/screens/screenTypes.ts`
 - Test: `mobile/src/Onboarding.test.ts`
 - Test: `mobile/src/i18n.test.ts`
 
@@ -277,4 +276,3 @@
 - Record native-device gaps explicitly: Android/iOS permission prompt, native map provider/API key, real GPS active/paused/off-route/stale/end, and background behavior remain device checks unless actually exercised.
 
 **Release gate:** Do not call the app ready for tomorrow’s live ride unless web permission fallback is understandable, all route-readiness gates are truthful, completion recovery is visible, and the native test checklist is clearly marked. A build can be functionally complete while still requiring the user’s phone check for OS permission and GPS behavior.
-
