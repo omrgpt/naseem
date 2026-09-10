@@ -235,8 +235,10 @@ export default function App() {
   const [storedRouteRecords, setStoredRouteRecords] = useState<RouteRecord[]>(
     [],
   );
+  const [routeStorageReady, setRouteStorageReady] = useState(false);
   const [storedActivities, setStoredActivities] = useState<ActivityDraft[]>([]);
   const [activitiesHydrated, setActivitiesHydrated] = useState(false);
+  const [activityStorageReady, setActivityStorageReady] = useState(false);
   const [pendingDraftHydrated, setPendingDraftHydrated] = useState(false);
   const [completionDraftView, setCompletionDraftView] =
     useState<ActivityDraft | null>(null);
@@ -374,43 +376,83 @@ export default function App() {
     ])
       .then(async ([v2, v1]) => {
         if (!active) return;
-        const source = v2 ?? v1;
-        const loaded = readStoredRouteRecords(source, {
+        const readOptions = {
           catalogRouteIds: ROUTE_ALTERNATIVES.map((route) => route.id),
           catalogSources: ["Bahrain Tourism"],
-        });
-        setStoredRouteRecords(uniqueRecords(loaded.routes));
+        };
+        const v2Loaded = v2 && isValidRouteStoragePayload(v2)
+          ? readStoredRouteRecords(v2, readOptions)
+          : null;
+        const v1Loaded = v1 && isValidRouteStoragePayload(v1)
+          ? readStoredRouteRecords(v1, readOptions)
+          : null;
+        const loaded =
+          v2Loaded && v2Loaded.sourceVersion !== null
+            ? v2Loaded
+            : v1Loaded && v1Loaded.sourceVersion !== null
+              ? v1Loaded
+              : !v2 && !v1
+                ? { routes: [], migrated: false, sourceVersion: null }
+                : null;
+        if (!loaded) {
+          // Do not turn an unreadable store into an empty write. Keep the
+          // in-memory catalog usable, but leave persistence disabled until a
+          // later explicit write or reload can establish a valid store.
+          setRoutesHydrated(true);
+          setRouteStorageReady(false);
+          return;
+        }
+        setStoredRouteRecords((current) =>
+          uniqueRecords([...loaded.routes, ...current]),
+        );
         if (!v2 && v1 && loaded.migrated)
           await AsyncStorage.setItem(
             ROUTE_STORAGE_V2_KEY,
             serializeStoredRouteRecords(loaded.routes),
           );
-        if (active) setRoutesHydrated(true);
+        if (active) {
+          setRoutesHydrated(true);
+          setRouteStorageReady(true);
+        }
       })
       .catch(() => {
-        if (active) setRoutesHydrated(true);
+        if (active) {
+          setRoutesHydrated(true);
+          setRouteStorageReady(false);
+        }
       });
     return () => {
       active = false;
     };
   }, []);
   useEffect(() => {
-    if (routesHydrated)
+    if (routesHydrated && routeStorageReady)
       void AsyncStorage.setItem(
         ROUTE_STORAGE_V2_KEY,
         serializeStoredRouteRecords(storedRouteRecords),
       ).catch(() => undefined);
-  }, [routesHydrated, storedRouteRecords]);
+  }, [routeStorageReady, routesHydrated, storedRouteRecords]);
   useEffect(() => {
     let active = true;
     void AsyncStorage.getItem(ACTIVITY_STORAGE_KEY)
       .then((raw) => {
         if (!active) return;
-        setStoredActivities(parseActivities(raw));
+        if (raw && !isValidActivityStorage(raw)) {
+          setActivitiesHydrated(true);
+          setActivityStorageReady(false);
+          return;
+        }
+        setStoredActivities((current) =>
+          uniqueActivities([...parseActivities(raw), ...current]),
+        );
         setActivitiesHydrated(true);
+        setActivityStorageReady(true);
       })
       .catch(() => {
-        if (active) setActivitiesHydrated(true);
+        if (active) {
+          setActivitiesHydrated(true);
+          setActivityStorageReady(false);
+        }
       });
     return () => {
       active = false;
@@ -437,12 +479,12 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (activitiesHydrated)
+    if (activitiesHydrated && activityStorageReady)
       void AsyncStorage.setItem(
         ACTIVITY_STORAGE_KEY,
         serializeActivities(storedActivities),
       ).catch(() => undefined);
-  }, [activitiesHydrated, storedActivities]);
+  }, [activitiesHydrated, activityStorageReady, storedActivities]);
   useEffect(() => {
     if (!activitiesHydrated || !pendingDraftHydrated) return;
     const draft = completionDraftView;
@@ -534,9 +576,15 @@ export default function App() {
   const deleteSavedRoutes = () => {
     setStoredRouteRecords([]);
     setStoredActivities([]);
+    setRouteStorageReady(true);
+    setActivityStorageReady(true);
     setSelectedRouteId(null);
     setConfirmedRouteId(null);
     setDetailRouteId(null);
+    void Promise.all([
+      AsyncStorage.removeItem(ROUTE_STORAGE_V1_KEY),
+      AsyncStorage.removeItem(ACTIVITY_PENDING_STORAGE_KEY),
+    ]).catch(() => undefined);
     setRouteMessage(
       uiText("deleteDone", "Saved personal routes removed from this device."),
     );
@@ -2565,6 +2613,36 @@ function uniqueRecords(records: RouteRecord[]) {
       byId.set(record.id, record);
   });
   return [...byId.values()];
+}
+function uniqueActivities(activities: ActivityDraft[]) {
+  const byId = new Map<string, ActivityDraft>();
+  activities.forEach((activity) => byId.set(activity.id, activity));
+  return [...byId.values()];
+}
+function isValidActivityStorage(raw: string) {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Boolean(
+      parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        (parsed as { version?: unknown }).version === 1 &&
+        Array.isArray((parsed as { activities?: unknown }).activities),
+    );
+  } catch {
+    return false;
+  }
+}
+function isValidRouteStoragePayload(raw: string) {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return true;
+    if (!parsed || typeof parsed !== "object") return false;
+    const value = parsed as { version?: unknown; routes?: unknown };
+    return (value.version === 1 || value.version === 2) && Array.isArray(value.routes);
+  } catch {
+    return false;
+  }
 }
 function upsertRecords(records: RouteRecord[], record: RouteRecord) {
   return uniqueRecords([
