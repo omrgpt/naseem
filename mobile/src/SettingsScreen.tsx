@@ -153,11 +153,12 @@ const COPY: Record<Language, SettingsCopy> = {
     privacyCenterHint: "See what is saved and how location is used.",
     exportData: "Export saved data",
     exportDataHint: "Create a copy of saved routes, rides, and preferences.",
-    deleteData: "Delete all saved data",
-    deleteDataHint: "Remove saved routes and rides from this device.",
-    deleteTitle: "Delete all saved data?",
+    deleteData: "Delete saved routes and rides",
+    deleteDataHint:
+      "Remove saved routes and rides from this device; your settings stay unchanged.",
+    deleteTitle: "Delete saved routes and rides?",
     deleteBody:
-      "This will remove saved routes and rides from this device. You can cancel now; confirmed deletion cannot be undone.",
+      "This will remove every saved route and ride from this device. Your language and other settings will stay unchanged. You can cancel now; confirmed deletion cannot be undone.",
     keepData: "Keep my data",
     deletePermanently: "Delete permanently",
     cancel: "Cancel",
@@ -206,11 +207,12 @@ const COPY: Record<Language, SettingsCopy> = {
     privacyCenterHint: "تعرّف على ما يُحفظ وكيف يُستخدم الموقع.",
     exportData: "تصدير البيانات المحفوظة",
     exportDataHint: "أنشئ نسخة من المسارات والرحلات والتفضيلات المحفوظة.",
-    deleteData: "حذف جميع البيانات المحفوظة",
-    deleteDataHint: "أزل المسارات والرحلات المحفوظة من هذا الجهاز.",
-    deleteTitle: "حذف جميع البيانات المحفوظة؟",
+    deleteData: "حذف المسارات والرحلات المحفوظة",
+    deleteDataHint:
+      "أزل المسارات والرحلات المحفوظة من هذا الجهاز؛ وستبقى إعداداتك كما هي.",
+    deleteTitle: "حذف المسارات والرحلات المحفوظة؟",
     deleteBody:
-      "ستتم إزالة المسارات والرحلات المحفوظة من هذا الجهاز. يمكنك الإلغاء الآن؛ ولا يمكن التراجع بعد تأكيد الحذف.",
+      "سيؤدي ذلك إلى إزالة جميع المسارات والرحلات المحفوظة من هذا الجهاز. ستبقى لغتك وإعداداتك الأخرى دون تغيير. يمكنك الإلغاء الآن؛ ولا يمكن التراجع بعد تأكيد الحذف.",
     keepData: "الاحتفاظ ببياناتي",
     deletePermanently: "حذف نهائياً",
     cancel: "إلغاء",
@@ -517,6 +519,7 @@ export function SettingsScreen({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t.deleteData}
+            accessibilityHint={t.deleteDataHint}
             accessibilityState={{ disabled: !onDeleteData }}
             disabled={!onDeleteData}
             onPress={() => setConfirmDelete(true)}
@@ -712,8 +715,14 @@ function SegmentedControl<T extends string>({
             key={option.value}
             accessibilityRole="radio"
             accessibilityLabel={option.label}
-            accessibilityState={{ selected, disabled: !onChange }}
+            accessibilityState={{
+              checked: selected,
+              selected,
+              disabled: !onChange,
+            }}
+            aria-checked={selected}
             disabled={!onChange}
+            hitSlop={4}
             onPress={() => onChange?.(option.value)}
             style={({ pressed }) => [
               styles.segment,
