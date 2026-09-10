@@ -4,6 +4,7 @@ import type {
   PositionMatch,
   RouteRecord,
 } from "./domain";
+import type { DistanceDisplay } from "./distanceDisplay";
 import { copy, localizedConfidenceLabel } from "./i18n";
 import { routeEvidenceConfidence } from "./routeAnalysis";
 
@@ -33,6 +34,10 @@ export type RouteLayerInput = {
   analysis?: AnalysisRun;
   selected?: boolean;
   match?: PositionMatch;
+  distanceDisplays?: Readonly<{
+    en: DistanceDisplay;
+    ar: DistanceDisplay;
+  }>;
 };
 
 export function buildRouteLayers({
@@ -40,14 +45,21 @@ export function buildRouteLayers({
   analysis,
   selected = true,
   match,
+  distanceDisplays,
 }: RouteLayerInput): RouteLayer[] {
   const routeConfidence = routeEvidenceConfidence(route);
   const forecastConfidence = analysis?.forecastConfidence ?? "low";
+  const formatDistance =
+    distanceDisplays?.en.formatDistance ??
+    ((value: number) => `${formatKm(value)} km`);
+  const formatDistanceAr =
+    distanceDisplays?.ar.formatDistance ??
+    ((value: number) => `${formatKmAr(value)} كم`);
   const forecastSegment =
     analysis?.segments.find((segment) => segment.wind.kind === "headwind") ??
     analysis?.segments[0];
   const forecastDetail = forecastSegment
-    ? `${conditionName(forecastSegment.wind.kind)} across ${formatKm(forecastSegment.startDistanceKm)}–${formatKm(forecastSegment.endDistanceKm)} km; forecast confidence is ${localizedConfidenceLabel(copy.en, forecastConfidence)}.`
+    ? `${conditionName(forecastSegment.wind.kind)} across ${formatDistance(forecastSegment.startDistanceKm)}–${formatDistance(forecastSegment.endDistanceKm)}; forecast confidence is ${localizedConfidenceLabel(copy.en, forecastConfidence)}.`
     : "Forecast condition is not available for the selected revision.";
   const live = match
     ? liveLayerCopy(match)
@@ -83,14 +95,14 @@ export function buildRouteLayers({
       labelAr: "حالة التوقع",
       detail: forecastDetail,
       detailAr: forecastSegment
-        ? `${conditionNameAr(forecastSegment.wind.kind)} بين ${formatKmAr(forecastSegment.startDistanceKm)} و${formatKmAr(forecastSegment.endDistanceKm)} كم؛ ${localizedConfidenceLabel(copy.ar, forecastConfidence)} للتوقع.`
+        ? `${conditionNameAr(forecastSegment.wind.kind)} بين ${formatDistanceAr(forecastSegment.startDistanceKm)} و${formatDistanceAr(forecastSegment.endDistanceKm)}؛ ${localizedConfidenceLabel(copy.ar, forecastConfidence)} للتوقع.`
         : "لا تتوفر حالة توقع لهذه النسخة المختارة.",
       tone: forecastSegment
         ? forecastTone(forecastSegment.wind.kind)
         : "uncertain",
       confidence: forecastConfidence,
       accessibleLabel: `Forecast condition layer: ${forecastDetail}`,
-      accessibleLabelAr: `طبقة حالة التوقع: ${forecastSegment ? `${conditionNameAr(forecastSegment.wind.kind)} بين ${formatKmAr(forecastSegment.startDistanceKm)} و${formatKmAr(forecastSegment.endDistanceKm)} كم.` : "لا تتوفر حالة توقع."}`,
+      accessibleLabelAr: `طبقة حالة التوقع: ${forecastSegment ? `${conditionNameAr(forecastSegment.wind.kind)} بين ${formatDistanceAr(forecastSegment.startDistanceKm)} و${formatDistanceAr(forecastSegment.endDistanceKm)}.` : "لا تتوفر حالة توقع."}`,
     },
     {
       id: "selection",

@@ -9,6 +9,7 @@ import type {
 } from "./domain";
 import { copy, type Language } from "./i18n";
 import type { Palette } from "./designTokens";
+import type { DistanceDisplay } from "./distanceDisplay";
 import type { RouteLayer } from "./routeConditions";
 
 export type Copy = typeof copy.en;
@@ -37,6 +38,7 @@ export type ScreenBaseProps = {
   language?: Language;
   formatNumber?: (value: number, options?: Intl.NumberFormatOptions) => string;
   formatTime?: (instant: string) => string;
+  distanceDisplay: DistanceDisplay;
 };
 export type RoadLabels = Partial<Record<RoadKind, string>>;
 export type RouteOrigin = "pilot" | "gpx" | "drawn" | "generated" | "unknown";
@@ -182,7 +184,7 @@ export type RoutesScreenProps = ScreenBaseProps & {
   activeField: "start" | "destination" | null;
   startText: string;
   destinationText: string;
-  targetDistanceKm?: string;
+  targetDistanceInput?: string;
   mapText: RoutesMapText;
   roadLabels?: RoadLabels;
   samples: RoutePlan[];

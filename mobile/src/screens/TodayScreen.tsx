@@ -49,6 +49,7 @@ export function TodayScreen({
   palette,
   styles,
   formatNumber,
+  distanceDisplay,
   route,
   conditions,
   refreshing,
@@ -148,11 +149,7 @@ export function TodayScreen({
             </View>
             <Text style={[styles.routeMeta, rtl && styles.textRight]}>
               {variantLabel ? `${variantLabel} · ` : ""}
-              {numberText(canonicalRoute.distanceKm, {
-                minimumFractionDigits: 1,
-                maximumFractionDigits: 1,
-              })}{" "}
-              {tx(t, "km", "km")} ·{" "}
+              {distanceDisplay.formatDistance(canonicalRoute.distanceKm)} ·{" "}
               {routeStatus === "ready" && canonicalRoute.durationMinutes
                 ? `${numberText(canonicalRoute.durationMinutes, {
                     maximumFractionDigits: 0,
@@ -227,7 +224,7 @@ export function TodayScreen({
             </Text>
             <Text style={[styles.sectionCaption, rtl && styles.textRight]}>
               {conditions
-                ? `${numberText(Math.round(conditions.temperature), { maximumFractionDigits: 0 })}° · ${numberText(Math.round(conditions.wind.speed), { maximumFractionDigits: 0 })} ${tx(t, "speedUnit", "km/h")}`
+                ? `${numberText(Math.round(conditions.temperature), { maximumFractionDigits: 0 })}° · ${distanceDisplay.formatSpeed(conditions.wind.speed)}`
                 : tx(
                     t,
                     "forecastFallback",

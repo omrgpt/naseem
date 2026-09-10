@@ -43,6 +43,11 @@ import { UiDirectionLab } from "./src/UiDirectionLab";
 import { Icon, type IconName } from "./src/Icon";
 import type { Language } from "./src/i18n";
 import { copy, directionForLanguage, localeForLanguage } from "./src/i18n";
+import {
+  createDistanceDisplay,
+  kilometresFromDisplayValue,
+  type DistanceUnit,
+} from "./src/distanceDisplay";
 import { analyseRoute } from "./src/routeEngine";
 import {
   aheadWindow,
@@ -287,7 +292,7 @@ export default function App() {
   >(null);
   const [startText, setStartText] = useState("");
   const [destinationText, setDestinationText] = useState("");
-  const [targetDistanceKm, setTargetDistanceKm] = useState("20");
+  const [targetDistanceInput, setTargetDistanceInput] = useState("20");
   const [manualMode, setManualMode] = useState(false);
   const [manualPoints, setManualPoints] = useState<Coordinate[]>([]);
   const [manualRedo, setManualRedo] = useState<Coordinate[]>([]);
@@ -317,6 +322,48 @@ export default function App() {
   const t = copy[language];
   const rtl = language === "ar";
   const locale = localeForLanguage(language);
+  const distanceDisplay = useMemo(
+    () =>
+      createDistanceDisplay({
+        unit: preferences.distanceUnit,
+        distanceLabels: { km: t.km, mi: t.mi },
+        speedLabels: { km: t.speedUnit, mi: t.speedUnitMiles },
+        formatNumber: (value, options) => formatNumber(value, locale, options),
+      }),
+    [
+      locale,
+      preferences.distanceUnit,
+      t.km,
+      t.mi,
+      t.speedUnit,
+      t.speedUnitMiles,
+    ],
+  );
+  const routeLayerDistanceDisplays = useMemo(
+    () => ({
+      en: createDistanceDisplay({
+        unit: preferences.distanceUnit,
+        distanceLabels: { km: copy.en.km, mi: copy.en.mi },
+        speedLabels: {
+          km: copy.en.speedUnit,
+          mi: copy.en.speedUnitMiles,
+        },
+        formatNumber: (value, options) =>
+          formatNumber(value, localeForLanguage("en"), options),
+      }),
+      ar: createDistanceDisplay({
+        unit: preferences.distanceUnit,
+        distanceLabels: { km: copy.ar.km, mi: copy.ar.mi },
+        speedLabels: {
+          km: copy.ar.speedUnit,
+          mi: copy.ar.speedUnitMiles,
+        },
+        formatNumber: (value, options) =>
+          formatNumber(value, localeForLanguage("ar"), options),
+      }),
+    }),
+    [preferences.distanceUnit],
+  );
   const palette = theme === "light" ? LIGHT : DARK;
   const screenStyles = useMemo(
     () => createScreenStyles(palette, rtl),
@@ -334,6 +381,23 @@ export default function App() {
   );
   const uiText = (key: string, fallback: string) =>
     screenText(t, key, fallback);
+  const targetDistanceInputUnit = useRef<DistanceUnit>("km");
+
+  useEffect(() => {
+    const nextUnit = preferences.distanceUnit;
+    const previousUnit = targetDistanceInputUnit.current;
+    if (nextUnit === previousUnit) return;
+
+    const enteredValue = Number(targetDistanceInput);
+    if (Number.isFinite(enteredValue)) {
+      const canonicalKm = kilometresFromDisplayValue(
+        enteredValue,
+        previousUnit,
+      );
+      setTargetDistanceInput(distanceDisplay.formatDistanceValue(canonicalKm));
+    }
+    targetDistanceInputUnit.current = nextUnit;
+  }, [distanceDisplay, preferences.distanceUnit, targetDistanceInput]);
 
   const showAppAlert = (
     title: string,
@@ -702,12 +766,8 @@ export default function App() {
       "\u00a0",
     );
   const liveFormatDistance = useCallback(
-    (value: number) =>
-      `${formatNumber(value, locale, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      })} ${t.km}`,
-    [locale, t.km],
+    (value: number) => distanceDisplay.formatDistance(value),
+    [distanceDisplay],
   );
   const liveFormatTime = useCallback(
     (instant: string) => formatAppTime(instant),
@@ -1289,13 +1349,18 @@ export default function App() {
       );
       return;
     }
-    const target = Number(targetDistanceKm);
+    const enteredTarget = Number(targetDistanceInput);
+    const target = Number.isFinite(enteredTarget)
+      ? kilometresFromDisplayValue(enteredTarget, preferences.distanceUnit)
+      : Number.NaN;
     if (!Number.isFinite(target) || target < 5 || target > 80) {
       setRouteMessage(
         uiText(
           "generatorTargetError",
-          "Enter a target distance between 5 and 80 km.",
-        ),
+          "Enter a target distance between {min} and {max}.",
+        )
+          .replace("{min}", distanceDisplay.formatDistance(5))
+          .replace("{max}", distanceDisplay.formatDistance(80)),
       );
       return;
     }
@@ -1324,7 +1389,7 @@ export default function App() {
     }));
     const candidate = routeFromCoordinates(
       `generated-${Date.now()}`,
-      `${template.name} · ${target} km target`,
+      `${template.name} · ${distanceDisplay.formatDistance(target)} target`,
       shifted,
       "Generated route candidate",
     );
@@ -1754,6 +1819,7 @@ export default function App() {
         route: homeRecord,
         analysis: homeAnalysisResult?.run,
         selected: true,
+        distanceDisplays: routeLayerDistanceDisplays,
       })
     : [];
   const detailPlan =
@@ -1780,16 +1846,17 @@ export default function App() {
         route: detailRecord,
         analysis: detailAnalysisResult?.run,
         selected: true,
+        distanceDisplays: routeLayerDistanceDisplays,
       })
     : [];
   const homeRecommendationReason = homeAnalysisResult
-    ? explainSurfaceRun(homeAnalysisResult.run, t, language, locale)
+    ? explainSurfaceRun(homeAnalysisResult.run, t, language, distanceDisplay)
     : uiText(
         "goodWindowCopy",
         "Forecast is shown by named route segment. Comparison is paused while route/access evidence is being reviewed. This is not a safety claim.",
       );
   const detailComparisonReason = detailAnalysisResult
-    ? explainSurfaceRun(detailAnalysisResult.run, t, language, locale)
+    ? explainSurfaceRun(detailAnalysisResult.run, t, language, distanceDisplay)
     : undefined;
   const nbhRecord = recordById(NBH_LOOP.id);
   const nbhAnalysisResult = nbhRecord
@@ -1822,6 +1889,7 @@ export default function App() {
         route: nbhRecord,
         analysis: nbhAnalysisResult?.run,
         selected: true,
+        distanceDisplays: routeLayerDistanceDisplays,
       })
     : [];
   const detailVariant =
@@ -1860,10 +1928,7 @@ export default function App() {
         ? t.nearNbhEntry
         : t.nbhEntryDistance.replace(
             "{distance}",
-            formatNumber(nbhEntryDistanceKm, locale, {
-              minimumFractionDigits: 1,
-              maximumFractionDigits: 1,
-            }),
+            distanceDisplay.formatDistance(nbhEntryDistanceKm),
           );
   const commonMapText = (plan: RoutePlan | null, status: RouteStatus) => ({
     native:
@@ -1895,9 +1960,15 @@ export default function App() {
     loop: t.loop,
     zoomIn: t.zoomIn,
     zoomOut: t.zoomOut,
-    distanceUnit: t.km,
-    formatNumber: (value: number, options?: Intl.NumberFormatOptions) =>
-      formatNumber(value, locale, options),
+    distanceUnit: distanceDisplay.distanceLabel,
+    formatNumber: (value: number, options?: Intl.NumberFormatOptions) => {
+      const isDistance =
+        options?.minimumFractionDigits === 1 &&
+        options?.maximumFractionDigits === 1;
+      return isDistance
+        ? distanceDisplay.formatDistanceValue(value, options)
+        : formatNumber(value, locale, options);
+    },
     mapLabel: plan ? `${plan.name} · ${uiText("route", "route")}` : t.mapWeb,
     mapHint: t.mapGestures,
     routePoints: uiText("routePoints", "Route points"),
@@ -1928,7 +1999,7 @@ export default function App() {
           (record) =>
             record.ownership === "personal" && record.origin !== "gpx",
         )
-        .map((record) => surfaceItem(record, language, t)),
+        .map((record) => surfaceItem(record, language, t, distanceDisplay)),
       emptyLabel: uiText("youNoSavedRoutes", "No personal routes yet."),
     },
     {
@@ -1940,7 +2011,7 @@ export default function App() {
       ),
       items: storedRouteRecords
         .filter((record) => record.origin === "gpx")
-        .map((record) => surfaceItem(record, language, t)),
+        .map((record) => surfaceItem(record, language, t, distanceDisplay)),
       emptyLabel: uiText("youNoImports", "No imported tracks yet."),
     },
   ];
@@ -1951,6 +2022,7 @@ export default function App() {
         analysis: rideAnalysisResult?.run,
         selected: true,
         match: live.position.match,
+        distanceDisplays: routeLayerDistanceDisplays,
       })
     : [];
   const snapshot: LiveRideSnapshot | null =
@@ -2070,6 +2142,7 @@ export default function App() {
         statusLabel: uiText("youProfileStatus", "Local profile"),
       }}
       locationPermission={locationPermission}
+      distanceUnit={preferences.distanceUnit}
       notificationsEnabled={preferences.notificationsEnabled}
       backgroundRefreshEnabled={preferences.backgroundRefreshEnabled}
       onBack={() => setSettingsOpen(false)}
@@ -2077,10 +2150,9 @@ export default function App() {
         setSettingsOpen(false);
         setEditingOnboarding(true);
       }}
-      onThemeChange={(next: SettingsTheme) =>
-        updateTheme(next === "system" ? "dark" : next)
-      }
+      onThemeChange={(next: SettingsTheme) => updateTheme(next)}
       onLanguageChange={updateLanguage}
+      onDistanceUnitChange={(unit) => commitPreferences({ distanceUnit: unit })}
       onNotificationsChange={(enabled) =>
         commitPreferences({ notificationsEnabled: enabled })
       }
@@ -2099,6 +2171,7 @@ export default function App() {
       styles={screenStyles}
       palette={palette}
       formatNumber={(value, options) => formatNumber(value, locale, options)}
+      distanceDisplay={distanceDisplay}
       formatTime={(instant) => formatBahrainTime(instant, locale, { hour12 })}
       route={detailPlan}
       routeStatus={detailRecord ? routeStatusForRecord(detailRecord) : "draft"}
@@ -2148,6 +2221,7 @@ export default function App() {
       styles={screenStyles}
       palette={palette}
       formatNumber={(value, options) => formatNumber(value, locale, options)}
+      distanceDisplay={distanceDisplay}
       route={homePlan}
       conditions={conditions}
       refreshing={refreshing}
@@ -2181,12 +2255,13 @@ export default function App() {
       styles={screenStyles}
       palette={palette}
       formatNumber={(value, options) => formatNumber(value, locale, options)}
+      distanceDisplay={distanceDisplay}
       builder={builder}
       builderPreview={builder.route}
       activeField={activeField}
       startText={startText}
       destinationText={destinationText}
-      targetDistanceKm={targetDistanceKm}
+      targetDistanceInput={targetDistanceInput}
       mapText={commonMapText(
         builder.route,
         builder.status === "ready"
@@ -2255,7 +2330,7 @@ export default function App() {
       }}
       onStartText={(value) => updatePlannerText("start", value)}
       onDestinationText={(value) => updatePlannerText("destination", value)}
-      onGenerationDistance={setTargetDistanceKm}
+      onGenerationDistance={setTargetDistanceInput}
       onFocusField={setActiveField}
       onChooseOnMap={(field) => setActiveField(field)}
       onUseCurrentLocation={(field) => void useCurrentLocation(field)}
@@ -2311,6 +2386,7 @@ export default function App() {
       styles={screenStyles}
       palette={palette}
       formatNumber={(value, options) => formatNumber(value, locale, options)}
+      distanceDisplay={distanceDisplay}
       route={ridePlan}
       recordingOnly={recordingOnlyRide}
       state={live.state}
@@ -2384,6 +2460,7 @@ export default function App() {
       styles={screenStyles}
       palette={palette}
       formatNumber={(value, options) => formatNumber(value, locale, options)}
+      distanceDisplay={distanceDisplay}
       profile={{
         name: preferences.displayName || (rtl ? "راكب نسيم" : "Naseem rider"),
         detail: t.location,
@@ -2718,29 +2795,25 @@ function explainSurfaceRun(
   run: ReturnType<typeof analyseRouteRevision>["run"],
   t: typeof copy.en,
   language: Language,
-  locale: string,
+  distanceDisplay: ReturnType<typeof createDistanceDisplay>,
 ) {
   return explainRun(
     run,
-    (value) =>
-      formatNumber(value, locale, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      }),
+    (value) => distanceDisplay.formatDistance(value),
     {
       paused: t.comparisonPaused,
       headwindAndTailwind: (headwind, headwindKm, tailwind, tailwindKm) =>
         language === "ar"
-          ? `${headwind} تحمل الرياح الأمامية الأقوى عبر ${headwindKm} كم؛ وتكون ${tailwind} أكثر ملاءمة عبر ${tailwindKm} كم.`
-          : `${headwind} carries the stronger headwind across ${headwindKm} km; ${tailwind} is more favourable across ${tailwindKm} km.`,
+          ? `${headwind} تحمل الرياح الأمامية الأقوى عبر ${headwindKm}؛ وتكون ${tailwind} أكثر ملاءمة عبر ${tailwindKm}.`
+          : `${headwind} carries the stronger headwind across ${headwindKm}; ${tailwind} is more favourable across ${tailwindKm}.`,
       headwind: (name, distanceKm) =>
         language === "ar"
-          ? `${name} تحمل الرياح الأمامية الأقوى عبر ${distanceKm} كم؛ خصص لها جهداً ووقتاً أكبر.`
-          : `${name} carries the stronger headwind across ${distanceKm} km; allow more effort and time there.`,
+          ? `${name} تحمل الرياح الأمامية الأقوى عبر ${distanceKm}؛ خصص لها جهداً ووقتاً أكبر.`
+          : `${name} carries the stronger headwind across ${distanceKm}; allow more effort and time there.`,
       tailwind: (name, distanceKm) =>
         language === "ar"
-          ? `${name} أكثر ملاءمة عبر ${distanceKm} كم.`
-          : `${name} is the more favourable section across ${distanceKm} km.`,
+          ? `${name} أكثر ملاءمة عبر ${distanceKm}.`
+          : `${name} is the more favourable section across ${distanceKm}.`,
       mixed:
         language === "ar"
           ? "يتغير أثر الرياح عبر مقاطع المسار المسماة."
@@ -2941,6 +3014,7 @@ function surfaceItem(
   record: RouteRecord,
   language: Language,
   t: typeof copy.en,
+  distanceDisplay: ReturnType<typeof createDistanceDisplay>,
 ): RouteSurfaceItem {
   const plan = displayPlanForRecord(record, language);
   const sourceLabel =
@@ -2968,9 +3042,12 @@ function surfaceItem(
     },
     display: {
       name: plan.name,
-      distance: `${formatNumber(plan.distanceKm, localeForLanguage(language), { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${t.km}`,
+      distance: distanceDisplay.formatDistance(plan.distanceKm),
       movingTime: plan.durationMinutes
-        ? `${formatNumber(plan.durationMinutes, localeForLanguage(language))} ${t.minutes}`
+        ? `${formatNumber(
+            plan.durationMinutes,
+            localeForLanguage(language),
+          )} ${t.minutes}`
         : undefined,
     },
   };

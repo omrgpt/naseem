@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Icon, type IconName } from "./Icon";
 import { StatusBadge } from "./UiPatterns";
+import type { DistanceUnit } from "./distanceDisplay";
 import { DARK, type Palette } from "./designTokens";
 import {
   FONT_ARABIC_BOLD,
@@ -24,8 +25,8 @@ import {
 } from "./fonts";
 import type { Language } from "./i18n";
 
-export type SettingsTheme = "system" | "light" | "dark";
-export type SettingsDistanceUnit = "km" | "mi";
+export type SettingsTheme = "light" | "dark";
+export type SettingsDistanceUnit = DistanceUnit;
 export type PermissionStatus = "granted" | "denied" | "limited" | "undetermined";
 
 export type SettingsProfile = {
@@ -67,7 +68,6 @@ type SettingsCopy = {
   editPreferences: string;
   appearance: string;
   appearanceHint: string;
-  system: string;
   light: string;
   dark: string;
   language: string;
@@ -120,7 +120,6 @@ const COPY: Record<Language, SettingsCopy> = {
     editPreferences: "Edit",
     appearance: "Appearance",
     appearanceHint: "Choose a light or dark surface.",
-    system: "System",
     light: "Light",
     dark: "Dark",
     language: "Language",
@@ -174,7 +173,6 @@ const COPY: Record<Language, SettingsCopy> = {
     editPreferences: "تعديل",
     appearance: "المظهر",
     appearanceHint: "اختر مظهراً فاتحاً أو داكناً.",
-    system: "النظام",
     light: "فاتح",
     dark: "داكن",
     language: "اللغة",
@@ -409,7 +407,6 @@ export function SettingsScreen({
             <SegmentedControl
               value={theme}
               options={[
-                { value: "system" as const, label: t.system },
                 { value: "light" as const, label: t.light },
                 { value: "dark" as const, label: t.dark },
               ]}

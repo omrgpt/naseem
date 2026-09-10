@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AnalysisRun, RouteRecord } from "./domain";
+import { createDistanceDisplay } from "./distanceDisplay";
 import { buildRouteLayers, confidenceLabel } from "./routeConditions";
+import { formatNumber } from "./routeTime";
 
 const route: RouteRecord = {
   id: "preview-route",
@@ -68,4 +70,29 @@ test("route layer confidence labels are rider-facing", () => {
   assert.equal(confidenceLabel("high"), "High confidence");
   assert.equal(confidenceLabel("medium"), "Medium confidence");
   assert.equal(confidenceLabel("low", true), "ثقة منخفضة");
+});
+
+test("route layer forecast ranges follow the selected display unit in both locales", () => {
+  const distanceDisplays = {
+    en: createDistanceDisplay({
+      unit: "mi",
+      distanceLabels: { km: "km", mi: "mi" },
+      speedLabels: { km: "km/h", mi: "mph" },
+      formatNumber: (value, options) => formatNumber(value, "en-BH", options),
+    }),
+    ar: createDistanceDisplay({
+      unit: "mi",
+      distanceLabels: { km: "كم", mi: "ميل" },
+      speedLabels: { km: "كم/س", mi: "ميل/س" },
+      formatNumber: (value, options) => formatNumber(value, "ar-BH", options),
+    }),
+  };
+  const layers = buildRouteLayers({ route, analysis, distanceDisplays });
+  const forecast = layers.find((layer) => layer.id === "forecast");
+
+  assert.ok(forecast);
+  assert.match(forecast.detail, /mi/);
+  assert.doesNotMatch(forecast.detail, /\bkm\b/iu);
+  assert.match(forecast.detailAr, /ميل/);
+  assert.doesNotMatch(forecast.detailAr, /كم/u);
 });

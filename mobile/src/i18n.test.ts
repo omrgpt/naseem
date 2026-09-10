@@ -106,8 +106,10 @@ test("NBH preview status and route identity stay consistent in both languages", 
 test("Arabic map labels and units are localized for RTL presentation", () => {
   const localizedKeys = [
     "km",
+    "mi",
     "minutes",
     "speedUnit",
+    "speedUnitMiles",
     "mapGestures",
     "zoomIn",
     "zoomOut",
@@ -129,7 +131,9 @@ test("Arabic map labels and units are localized for RTL presentation", () => {
   }
 
   assert.equal(catalogs.ar.km, "كم");
+  assert.equal(catalogs.ar.mi, "ميل");
   assert.equal(catalogs.ar.speedUnit, "كم/س");
+  assert.equal(catalogs.ar.speedUnitMiles, "ميل/س");
   assert.equal(catalogs.ar.minutes, "دقيقة");
 });
 

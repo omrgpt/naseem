@@ -151,7 +151,7 @@ const en = {
   locationUnavailable:
     "Current location is unavailable. Choose a point on the map or search again.",
   generatorNeedsStart: "Add a Start before generating a loop.",
-  generatorTargetError: "Enter a target distance between 5 and 80 km.",
+  generatorTargetError: "Enter a target distance between {min} and {max}.",
   home: "Home",
   plan: "Plan",
   ride: "Ride",
@@ -215,8 +215,10 @@ const en = {
   themeLight: "Light",
   themeDark: "Dark",
   km: "km",
+  mi: "mi",
   minutes: "min",
   speedUnit: "km/h",
+  speedUnitMiles: "mph",
   goodWindow: "A good window opens at {time}",
   bestWindowToday: "Best window today · {time}",
   nextGoodWindow: "Next good window · Tomorrow, {time}",
@@ -342,7 +344,7 @@ const en = {
     "Location permission was not granted. You can still plan a route.",
   remaining: "Remaining route",
   ahead: "Ahead",
-  aheadHorizon: "Next {distance} km",
+  aheadHorizon: "Next {distance}",
   nextSegment: "Next segment",
   refreshed: "Conditions refresh during an active ride.",
   windChanged:
@@ -461,7 +463,7 @@ const en = {
   nbhCatalogNote: "One NBH Loop option is available right now.",
   nbhPublicIdentityNote:
     "Bahrain Tourism describes a 50 km track. This preview contains 21.8 km of route information; the full track is not available here.",
-  nbhEntryDistance: "You are {distance} km from the NBH Loop entry in Zallaq.",
+  nbhEntryDistance: "You are {distance} from the NBH Loop entry in Zallaq.",
   nearNbhEntry: "Ready to start NBH Loop at the Zallaq entry.",
   recordWithoutFollowingNbh: "Record without following NBH Loop",
   recordWithoutFollowingNbhCopy:
@@ -661,7 +663,7 @@ const ar: typeof en = {
   locationUnavailable:
     "الموقع الحالي غير متاح. اختر نقطة على الخريطة أو ابحث مرة أخرى.",
   generatorNeedsStart: "أضف بداية قبل إنشاء حلقة.",
-  generatorTargetError: "أدخل مسافة مستهدفة بين ٥ و٨٠ كم.",
+  generatorTargetError: "أدخل مسافة مستهدفة بين {min} و{max}.",
   home: "الرئيسية",
   plan: "التخطيط",
   ride: "الرحلة",
@@ -724,8 +726,10 @@ const ar: typeof en = {
   themeLight: "فاتح",
   themeDark: "داكن",
   km: "كم",
+  mi: "ميل",
   minutes: "دقيقة",
   speedUnit: "كم/س",
+  speedUnitMiles: "ميل/س",
   goodWindow: "تبدأ فترة جيدة عند {time}",
   bestWindowToday: "أفضل فترة اليوم · {time}",
   nextGoodWindow: "الفترة الجيدة التالية · غداً، {time}",
@@ -848,7 +852,7 @@ const ar: typeof en = {
   permissionDenied: "لم يتم منح إذن الموقع. ما زال بإمكانك تخطيط مسار.",
   remaining: "المسار المتبقي",
   ahead: "أمامك",
-  aheadHorizon: "الـ{distance} كم التالية",
+  aheadHorizon: "الـ{distance} التالية",
   nextSegment: "المقطع التالي",
   refreshed: "تتحدث الظروف أثناء الرحلة النشطة.",
   windChanged:
@@ -962,7 +966,7 @@ const ar: typeof en = {
   nbhCatalogNote: "يتوفر خيار واحد من حلقة ناصر بن حمد حالياً.",
   nbhPublicIdentityNote:
     "تصف هيئة البحرين للسياحة مساراً بطول ٥٠ كم. تحتوي هذه المعاينة على معلومات لمسافة ٢١٫٨ كم؛ أما المسار الكامل فغير متاح هنا.",
-  nbhEntryDistance: "أنت على بعد {distance} كم من مدخل حلقة ناصر بن حمد في الزلاق.",
+  nbhEntryDistance: "أنت على بعد {distance} من مدخل حلقة ناصر بن حمد في الزلاق.",
   nearNbhEntry: "جاهز لبدء حلقة ناصر بن حمد من مدخل الزلاق.",
   recordWithoutFollowingNbh: "سجّل بدون اتباع حلقة ناصر بن حمد",
   recordWithoutFollowingNbhCopy:

@@ -20,6 +20,7 @@ export function LiveRideScreen({
   palette,
   styles,
   formatNumber,
+  distanceDisplay,
   route,
   recordingOnly = false,
   state,
@@ -301,6 +302,7 @@ export function LiveRideScreen({
             styles={styles}
             palette={palette}
             formatNumber={formatNumber}
+            distanceDisplay={distanceDisplay}
             onSave={onSaveCompletion}
             onRetrySave={onRetrySaveCompletion}
             onDiscard={onDiscardCompletion}
@@ -545,7 +547,12 @@ export function LiveRideScreen({
         <View style={styles.atlasSheet} accessibilityLiveRegion="polite">
           <Text style={[styles.atlasTitle, rtl && styles.textRight]}>
             {position?.remainingLabel ??
-              `${numberText(Math.max(0, canonical.distanceKm * (1 - (position?.progress ?? 0))), { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${screenText(t, "km", "km")}`}
+              distanceDisplay.formatDistance(
+                Math.max(
+                  0,
+                  canonical.distanceKm * (1 - (position?.progress ?? 0)),
+                ),
+              )}
           </Text>
           <Text style={[styles.atlasMeta, rtl && styles.textRight]}>
             {screenText(t, "remaining", "Remaining route")} ·{" "}
@@ -671,7 +678,7 @@ export function LiveRideScreen({
         </View>
         <Text style={[styles.panelCopy, rtl && styles.textRight]}>
           {navigable
-            ? `${numberText(canonical.distanceKm, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${screenText(t, "km", "km")} · ${numberText(canonical.durationMinutes, { maximumFractionDigits: 0 })} ${screenText(t, "minutes", "min")}`
+            ? `${distanceDisplay.formatDistance(canonical.distanceKm)} · ${numberText(canonical.durationMinutes, { maximumFractionDigits: 0 })} ${screenText(t, "minutes", "min")}`
             : screenText(
                 t,
                 "previewRouteNote",
@@ -835,6 +842,7 @@ function CompletionPanel({
   styles,
   palette,
   formatNumber,
+  distanceDisplay,
   onSave,
   onRetrySave,
   onDiscard,
@@ -846,6 +854,7 @@ function CompletionPanel({
   styles: LiveRideScreenProps["styles"];
   palette: LiveRideScreenProps["palette"];
   formatNumber?: LiveRideScreenProps["formatNumber"];
+  distanceDisplay: LiveRideScreenProps["distanceDisplay"];
   onSave?: () => void;
   onRetrySave?: () => void;
   onDiscard?: () => void;
@@ -911,7 +920,7 @@ function CompletionPanel({
       <View style={[styles.metricRail, rtl && styles.rtlRow]}>
         <Metric
           label={screenText(t, "recordedDistance", "Recorded distance")}
-          value={`${numberText(draft.distanceMeters / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${screenText(t, "km", "km")}`}
+          value={distanceDisplay.formatDistance(draft.distanceMeters / 1000)}
           styles={styles}
         />
         <Metric

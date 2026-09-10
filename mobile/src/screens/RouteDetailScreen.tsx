@@ -18,6 +18,7 @@ export function RouteDetailScreen({
   palette,
   styles,
   formatNumber,
+  distanceDisplay,
   route,
   routeStatus,
   departureLabel,
@@ -166,11 +167,7 @@ export function RouteDetailScreen({
               {canonical.name}
             </Text>
             <Text style={[styles.atlasMeta, rtl && styles.textRight]}>
-              {numberText(canonical.distanceKm, {
-                minimumFractionDigits: 1,
-                maximumFractionDigits: 1,
-              })}{" "}
-              {tx(t, "km", "km")}
+              {distanceDisplay.formatDistance(canonical.distanceKm)}
               {variantLabel ? ` · ${variantLabel}` : ""}
             </Text>
           </View>

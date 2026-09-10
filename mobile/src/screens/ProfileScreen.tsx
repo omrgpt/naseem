@@ -108,6 +108,7 @@ export function ProfileScreen({
   rtl = false,
   formatNumber,
   formatTime,
+  distanceDisplay,
   profile,
   collections = [],
   activities = [],
@@ -163,6 +164,7 @@ export function ProfileScreen({
         rtl={rtl}
         text={text}
         formatNumber={formatNumber}
+        distanceDisplay={distanceDisplay}
         onOpenCollection={onOpenCollection}
         onOpenRoute={onOpenRoute}
       />
@@ -173,6 +175,7 @@ export function ProfileScreen({
         rtl={rtl}
         text={text}
         formatNumber={formatNumber}
+        distanceDisplay={distanceDisplay}
         formatTime={formatTime}
       />
 
@@ -233,6 +236,7 @@ function RoutesSection({
   rtl,
   text,
   formatNumber,
+  distanceDisplay,
   onOpenCollection,
   onOpenRoute,
 }: {
@@ -242,6 +246,7 @@ function RoutesSection({
   rtl: boolean;
   text: ProfileCopy;
   formatNumber?: ProfileScreenProps["formatNumber"];
+  distanceDisplay: ProfileScreenProps["distanceDisplay"];
   onOpenCollection?: ProfileScreenProps["onOpenCollection"];
   onOpenRoute?: ProfileScreenProps["onOpenRoute"];
 }) {
@@ -282,6 +287,7 @@ function RoutesSection({
               rtl={rtl}
               text={text}
               formatNumber={formatNumber}
+              distanceDisplay={distanceDisplay}
               onOpen={onOpenRoute}
             />
           ))
@@ -320,6 +326,7 @@ function RoutesSection({
                 rtl={rtl}
                 text={text}
                 formatNumber={formatNumber}
+                distanceDisplay={distanceDisplay}
                 onOpen={onOpenRoute}
               />
             ))}
@@ -336,6 +343,7 @@ function ActivitySection({
   rtl,
   text,
   formatNumber,
+  distanceDisplay,
   formatTime,
 }: {
   activities: ActivityDraft[];
@@ -343,6 +351,7 @@ function ActivitySection({
   rtl: boolean;
   text: ProfileCopy;
   formatNumber?: ProfileScreenProps["formatNumber"];
+  distanceDisplay: ProfileScreenProps["distanceDisplay"];
   formatTime?: ProfileScreenProps["formatTime"];
 }) {
   const saved = activities
@@ -368,12 +377,9 @@ function ActivitySection({
                 ? activity.routeSnapshot.nameAr
                 : activity.routeSnapshot.name
               : text.recordingOnly;
-            const distance = formatNumber
-              ? formatNumber(activity.distanceMeters / 1000, {
-                  minimumFractionDigits: 1,
-                  maximumFractionDigits: 1,
-                })
-              : (activity.distanceMeters / 1000).toFixed(1);
+            const distance = distanceDisplay.formatDistance(
+              activity.distanceMeters / 1000,
+            );
             const ended = formatTime
               ? formatTime(activity.endedAt)
               : activity.endedAt;
@@ -397,7 +403,7 @@ function ActivitySection({
                     ]}
                     numberOfLines={2}
                   >
-                    {distance} {text.km} · {ended}
+                    {distance} · {ended}
                   </Text>
                 </View>
               </View>
@@ -472,6 +478,7 @@ function ProfileRouteRow({
   rtl,
   text,
   formatNumber,
+  distanceDisplay,
   onOpen,
 }: {
   item: RouteSurfaceItem;
@@ -479,19 +486,14 @@ function ProfileRouteRow({
   rtl: boolean;
   text: ProfileCopy;
   formatNumber?: ProfileScreenProps["formatNumber"];
+  distanceDisplay: ProfileScreenProps["distanceDisplay"];
   onOpen?: ProfileScreenProps["onOpenRoute"];
 }) {
   const name =
     rtl && item.route.nameAr
       ? item.route.nameAr
       : item.display?.name ?? item.route.name;
-  const fallbackDistance = formatNumber
-    ? formatNumber(item.route.distanceKm, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      })
-    : item.route.distanceKm.toFixed(1);
-  const distance = item.display?.distance ?? `${fallbackDistance} ${text.km}`;
+  const distance = distanceDisplay.formatDistance(item.route.distanceKm);
   const meta = item.display?.movingTime
     ? `${distance} · ${item.display.movingTime}`
     : distance;

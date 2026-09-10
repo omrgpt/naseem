@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { Icon, type IconName } from './Icon';
 import { localeForLanguage, type Language } from './i18n';
+import { distanceInUnit, type DistanceUnit } from './distanceDisplay';
 import { departureInstant, formatBahrainTime, formatNumber } from './routeTime';
 import { NBH_PREVIEW_DISTANCE_KM } from './domain';
 import { NBH_CUSTOMER_NAMES } from './seed';
@@ -34,7 +35,7 @@ export type ExperienceLevel = 'new' | 'regular' | 'endurance';
 export type RidingGoal = 'plan' | 'train' | 'discover' | 'commute';
 export type RideWindow = 'morning' | 'afternoon' | 'flexible';
 export type WindPreference = 'balanced' | 'sheltered' | 'tailwind';
-export type DistanceUnit = 'km' | 'mi';
+export type { DistanceUnit } from './distanceDisplay';
 
 export type OnboardingData = {
   displayName: string;
@@ -269,7 +270,6 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
 };
 
 const MAX_RIDER_NAME_LENGTH = 40;
-const MILES_PER_KILOMETRE = 0.621371192237334;
 
 export function formatOnboardingDistance(
   distanceKm: number,
@@ -277,7 +277,7 @@ export function formatOnboardingDistance(
   locale: string,
   labels: Pick<OnboardingCopy, 'km' | 'mi'>,
 ): string {
-  const value = distanceUnit === 'mi' ? distanceKm * MILES_PER_KILOMETRE : distanceKm;
+  const value = distanceInUnit(distanceKm, distanceUnit);
   const unitLabel = distanceUnit === 'mi' ? labels.mi : labels.km;
   return `${formatNumber(value, locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${unitLabel}`;
 }

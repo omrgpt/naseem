@@ -43,7 +43,7 @@ export type RoutesScreenProps = ScreenBaseProps & {
   activeField: "start" | "destination" | null;
   startText: string;
   destinationText: string;
-  targetDistanceKm?: string;
+  targetDistanceInput?: string;
   mapText: RoutesMapText;
   roadLabels?: RoadLabels;
   samples: RoutePlan[];
@@ -98,12 +98,13 @@ export function RoutesScreen({
   styles,
   formatNumber,
   formatTime,
+  distanceDisplay,
   builder,
   builderPreview,
   activeField,
   startText,
   destinationText,
-  targetDistanceKm,
+  targetDistanceInput,
   mapText,
   roadLabels,
   samples,
@@ -266,6 +267,7 @@ export function RoutesScreen({
           styles={styles}
           palette={palette}
           formatNumber={formatNumber}
+          distanceDisplay={distanceDisplay}
           mapText={mapText}
           roadLabels={roadLabels}
         />
@@ -423,6 +425,7 @@ export function RoutesScreen({
             rtl={rtl}
             styles={styles}
             formatNumber={formatNumber}
+            distanceDisplay={distanceDisplay}
             formatTime={formatTime}
             onUse={onUseMatchedRoute}
             onEdit={onEditPoints}
@@ -461,6 +464,9 @@ export function RoutesScreen({
           styles={styles}
           palette={palette}
           formatNumber={formatNumber}
+          distanceDisplay={distanceDisplay}
+          mapText={mapText}
+          roadLabels={roadLabels}
           chip={tx(t, "importedRoute", "Imported")}
           onPrimary={onUseImport}
           primaryLabel={tx(t, "useThisTrack", "Use this track")}
@@ -478,6 +484,9 @@ export function RoutesScreen({
           styles={styles}
           palette={palette}
           formatNumber={formatNumber}
+          distanceDisplay={distanceDisplay}
+          mapText={mapText}
+          roadLabels={roadLabels}
           chip={tx(t, "generatedRoute", "Generated")}
           onPrimary={onUseGenerated}
           primaryLabel={tx(t, "useThisRoute", "Use this route")}
@@ -541,10 +550,10 @@ export function RoutesScreen({
                   t,
                   "generatorTargetHint",
                   "Set a target distance after choosing a Start.",
-                )}
+                )} · {distanceDisplay.distanceLabel}
               </Text>
               <TextInput
-                value={targetDistanceKm}
+                value={targetDistanceInput}
                 onChangeText={onGenerationDistance}
                 keyboardType="numeric"
                 accessibilityLabel={tx(t, "targetDistance", "Target distance")}
@@ -588,6 +597,7 @@ export function RoutesScreen({
         styles={styles}
         palette={palette}
         formatNumber={formatNumber}
+        distanceDisplay={distanceDisplay}
         onSelect={onSelect}
       />
       <RouteCollection
@@ -600,6 +610,7 @@ export function RoutesScreen({
         styles={styles}
         palette={palette}
         formatNumber={formatNumber}
+        distanceDisplay={distanceDisplay}
         onSelect={onSelect}
       />
       {showSamples && (
@@ -613,6 +624,7 @@ export function RoutesScreen({
           styles={styles}
           palette={palette}
           formatNumber={formatNumber}
+          distanceDisplay={distanceDisplay}
           onSelect={onSelect}
         />
       )}
@@ -638,6 +650,7 @@ function KnownRouteCard({
   styles,
   palette,
   formatNumber,
+  distanceDisplay,
   mapText,
   roadLabels,
 }: {
@@ -647,6 +660,7 @@ function KnownRouteCard({
   styles: ReturnType<typeof import("../screenStyles").createScreenStyles>;
   palette: ScreenBaseProps["palette"];
   formatNumber?: ScreenBaseProps["formatNumber"];
+  distanceDisplay: ScreenBaseProps["distanceDisplay"];
   mapText: RoutesMapText;
   roadLabels?: RoadLabels;
 }) {
@@ -695,11 +709,7 @@ function KnownRouteCard({
           </Text>
           <Text style={[styles.sectionCaption, rtl && styles.textRight]}>
             {variantLabel} ·{" "}
-            {numberText(route.distanceKm, {
-              minimumFractionDigits: 1,
-              maximumFractionDigits: 1,
-            })}{" "}
-            {tx(t, "km", "km")}
+            {distanceDisplay.formatDistance(route.distanceKm)}
           </Text>
         </View>
         <StatusBadge
@@ -1046,6 +1056,7 @@ function RouteReadyPanel({
   rtl,
   styles,
   formatNumber,
+  distanceDisplay,
   formatTime,
   onUse,
   onEdit,
@@ -1057,18 +1068,14 @@ function RouteReadyPanel({
   rtl: boolean;
   styles: ReturnType<typeof import("../screenStyles").createScreenStyles>;
   formatNumber?: ScreenBaseProps["formatNumber"];
+  distanceDisplay: ScreenBaseProps["distanceDisplay"];
   formatTime?: ScreenBaseProps["formatTime"];
   onUse: () => void;
   onEdit: () => void;
   onAddStop: () => void;
   onReverse: () => void;
 }) {
-  const distance = formatNumber
-    ? formatNumber(route.distanceKm, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      })
-    : route.distanceKm.toFixed(1);
+  const distance = distanceDisplay.formatDistance(route.distanceKm);
   const duration = formatNumber
     ? formatNumber(route.durationMinutes, { maximumFractionDigits: 0 })
     : String(route.durationMinutes);
@@ -1087,7 +1094,7 @@ function RouteReadyPanel({
       <View style={[styles.metricRail, rtl && styles.rowRtl]}>
         <Metric
           label={tx(t, "distance", "Distance")}
-          value={`${distance} ${tx(t, "km", "km")}`}
+          value={distance}
           styles={styles}
         />
         <Metric
@@ -1163,6 +1170,9 @@ function ReviewCard({
   styles,
   palette,
   formatNumber,
+  distanceDisplay,
+  mapText,
+  roadLabels,
   chip,
   onPrimary,
   primaryLabel,
@@ -1177,6 +1187,9 @@ function ReviewCard({
   styles: ReturnType<typeof import("../screenStyles").createScreenStyles>;
   palette: ScreenBaseProps["palette"];
   formatNumber?: ScreenBaseProps["formatNumber"];
+  distanceDisplay: ScreenBaseProps["distanceDisplay"];
+  mapText: RoutesMapText;
+  roadLabels?: RoadLabels;
   chip: string;
   onPrimary: () => void;
   primaryLabel: string;
@@ -1185,12 +1198,13 @@ function ReviewCard({
 }) {
   const kind = routeGeometryKind(route);
   const status = routeGeometryStatus(route);
-  const distance = formatNumber
-    ? formatNumber(route.distanceKm, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      })
-    : route.distanceKm.toFixed(1);
+  const reviewMapStatus =
+    kind === "road_matched" && status === "ready"
+      ? ("matched" as const)
+      : status === "matching"
+        ? ("loading" as const)
+        : ("pilot" as const);
+  const distance = distanceDisplay.formatDistance(route.distanceKm);
   const points = formatNumber
     ? formatNumber(route.points.length, { maximumFractionDigits: 0 })
     : String(route.points.length);
@@ -1207,7 +1221,19 @@ function ReviewCard({
         </View>
         <StatusBadge label={chip} tone="warning" palette={palette} />
       </View>
-      <MapPreview route={route} fullScreen minimal rtl={rtl} />
+      <MapPreview
+        route={route}
+        fullScreen
+        minimal
+        rtl={rtl}
+        roadLabels={roadLabels}
+        mapText={{
+          ...mapText,
+          mapLabel: `${route.name} · ${tx(t, "route", "route")}`,
+          status: reviewMapStatus,
+          statusPilot: tx(t, "routePreviewLabel", "Route preview"),
+        }}
+      />
       <Text style={[styles.fieldHint, rtl && styles.textRight]}>
         {kind === "recorded_trace"
           ? tx(
@@ -1226,7 +1252,7 @@ function ReviewCard({
       <View style={[styles.metricRail, rtl && styles.rowRtl]}>
         <Metric
           label={tx(t, "distance", "Distance")}
-          value={`${distance} ${tx(t, "km", "km")}`}
+          value={distance}
           styles={styles}
         />
         <Metric
@@ -1438,6 +1464,7 @@ function RouteCollection({
   styles,
   palette,
   formatNumber,
+  distanceDisplay,
   onSelect,
 }: {
   title: string;
@@ -1449,6 +1476,7 @@ function RouteCollection({
   styles: ReturnType<typeof import("../screenStyles").createScreenStyles>;
   palette: ScreenBaseProps["palette"];
   formatNumber?: ScreenBaseProps["formatNumber"];
+  distanceDisplay: ScreenBaseProps["distanceDisplay"];
   onSelect: (route: RoutePlan) => void;
 }) {
   return (
@@ -1461,12 +1489,7 @@ function RouteCollection({
           {routes.map((route) => {
             const canonical = asCanonicalRoute(route)!;
             const chip = routeChipFor(canonical, t);
-            const distance = formatNumber
-              ? formatNumber(route.distanceKm, {
-                  minimumFractionDigits: 1,
-                  maximumFractionDigits: 1,
-                })
-              : route.distanceKm.toFixed(1);
+            const distance = distanceDisplay.formatDistance(route.distanceKm);
             return (
               <Pressable
                 key={route.id}
@@ -1489,7 +1512,7 @@ function RouteCollection({
                     {route.name}
                   </Text>
                   <Text style={[styles.listRowMeta, rtl && styles.textRight]}>
-                    {distance} {tx(t, "km", "km")} · {chip.label} ·{" "}
+                    {distance} · {chip.label} ·{" "}
                     {routeGeometryKind(canonical) === "road_matched"
                       ? tx(t, "roadMatched", "Road-matched")
                       : tx(t, "recordedTrack", "Recorded track")}
