@@ -11,18 +11,23 @@ const BAHRAIN_BOUNDS = { minLatitude: 25.5, maxLatitude: 26.5, minLongitude: 50.
 const MAX_WAYPOINTS = ROUTE_MATCHING_MAX_WAYPOINTS;
 const MAX_GEOMETRY_POINTS = 700;
 const MAX_ROUTED_DISTANCE_KM = 160;
+const MAX_ENDPOINT_OFFSET_KM = 2;
+const MAX_DISTANCE_METADATA_ERROR_RATIO = 0.01;
+const MAX_DISTANCE_METADATA_ERROR_M = 50;
 const ROUTER_CACHE_TTL_MS = 5 * 60_000;
 const ROUTER_CACHE_MAX_ENTRIES = 64;
 const ROUTER_CALLS_PER_MINUTE = 20;
 
 type RouterResponse = {
-  code?: string;
-  waypoints?: Array<{ location?: unknown }>;
-  routes?: Array<{
-    distance?: number;
-    geometry?: { coordinates?: unknown };
-    legs?: Array<{ distance?: number }>;
-  }>;
+  code?: unknown;
+  waypoints?: unknown;
+  routes?: unknown;
+};
+
+type RouterRoute = {
+  distance?: unknown;
+  geometry?: unknown;
+  legs?: unknown;
 };
 
 export type RouteMatchFailureCode = 'tooFewWaypoints' | 'tooManyWaypoints' | 'outsideCoverage' | 'routerUnavailable' | 'noRoute' | 'invalidResponse' | 'rateLimited';
@@ -67,23 +72,34 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
       signal: controller.signal,
     });
     if (!response.ok) return { ok: false, reason: 'routerUnavailable' };
-    const payload = await response.json() as RouterResponse;
-    const result = payload.routes?.[0];
-    const rawGeometry = result?.geometry?.coordinates;
-    const rawLegs = result?.legs;
-    if (payload.code !== 'Ok' || !result) return { ok: false, reason: payload.code === 'NoRoute' ? 'noRoute' : 'invalidResponse' };
-    if (!Array.isArray(rawGeometry) || !Array.isArray(rawLegs) || rawLegs.length !== route.points.length - 1) return { ok: false, reason: 'invalidResponse' };
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      return { ok: false, reason: 'invalidResponse' };
+    }
+    if (!isRecord(payload)) return { ok: false, reason: 'invalidResponse' };
+    const routerPayload = payload as RouterResponse;
+    const result = Array.isArray(routerPayload.routes) ? routerPayload.routes[0] : undefined;
+    if (routerPayload.code !== 'Ok' || !isRecord(result)) return { ok: false, reason: routerPayload.code === 'NoRoute' ? 'noRoute' : 'invalidResponse' };
+    const routeResult = result as RouterRoute;
+    const geometryResult = isRecord(routeResult.geometry) ? routeResult.geometry : undefined;
+    const geometry = parseGeometry(geometryResult?.coordinates);
+    const legs = parseLegDistances(routeResult.legs, route.points.length - 1);
+    const totalDistanceM = finiteNumber(routeResult.distance);
+    const snapped = parseSnappedWaypoints(routerPayload.waypoints, route.points);
+    if (!geometry || !legs || totalDistanceM === null || totalDistanceM <= 0 || totalDistanceM / 1_000 > MAX_ROUTED_DISTANCE_KM || !snapped.ok) return { ok: false, reason: 'invalidResponse' };
+    if (!endpointsCorrespond(geometry, route.points, snapped.coordinates)) return { ok: false, reason: 'invalidResponse' };
 
-    const geometry = simplifyGeometry(rawGeometry.map(toCoordinate).filter((point): point is Coordinate => point !== null), MAX_GEOMETRY_POINTS);
-    const snapped = payload.waypoints?.map((waypoint) => toCoordinate(waypoint.location)).filter((point): point is Coordinate => point !== null) ?? [];
-    const legs = rawLegs.map((leg) => Number(leg.distance));
-    const totalDistanceM = Number(result.distance);
-    if (geometry.length < 2 || legs.some((distance) => !Number.isFinite(distance) || distance <= 0) || !Number.isFinite(totalDistanceM) || totalDistanceM <= 0 || totalDistanceM / 1_000 > MAX_ROUTED_DISTANCE_KM) return { ok: false, reason: 'invalidResponse' };
     const geometryDistancesKm = cumulativeDistances(geometry);
-    geometryDistancesKm[geometryDistancesKm.length - 1] = totalDistanceM / 1_000;
+    const geometryDistanceKm = geometryDistancesKm.at(-1) ?? 0;
+    const routedDistanceKm = totalDistanceM / 1_000;
+    if (!isNondecreasing(geometryDistancesKm) || geometryDistanceKm <= 0 || routedDistanceKm < geometryDistanceKm || !distanceMetadataMatches(totalDistanceM, legs)) return { ok: false, reason: 'invalidResponse' };
+    geometryDistancesKm[geometryDistancesKm.length - 1] = routedDistanceKm;
+    if (!isNondecreasing(geometryDistancesKm)) return { ok: false, reason: 'invalidResponse' };
 
     let cumulativeM = 0;
-    const anchoredPoints = snapped.length === route.points.length ? route.points.map((point, index) => ({ ...point, ...snapped[index] })) : route.points;
+    const anchoredPoints = snapped.coordinates ? route.points.map((point, index) => ({ ...point, ...snapped.coordinates![index] })) : route.points;
     const points = anchoredPoints.map((point, index) => {
       const next = index < anchoredPoints.length - 1 ? anchoredPoints[index + 1] : anchoredPoints[index - 1] ?? point;
       const distanceKm = index === 0 ? 0 : cumulativeM / 1_000;
@@ -92,7 +108,7 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
     });
     // The router's total is authoritative for the road-following trace. Keep
     // the final waypoint exactly aligned with it after any rounding.
-    points[points.length - 1] = { ...points[points.length - 1], distanceKm: totalDistanceM / 1_000 };
+    points[points.length - 1] = { ...points[points.length - 1], distanceKm: routedDistanceKm };
     return { ok: true, route: {
         ...route,
         points,
@@ -106,6 +122,57 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function parseGeometry(value: unknown): Coordinate[] | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const geometry = value.map(toCoordinate);
+  return geometry.every((point): point is Coordinate => point !== null) ? geometry : null;
+}
+
+function parseLegDistances(value: unknown, expectedLength: number): number[] | null {
+  if (!Array.isArray(value) || value.length !== expectedLength) return null;
+  const distances = value.map((leg) => isRecord(leg) ? finiteNumber(leg.distance) : null);
+  return distances.every((distance): distance is number => distance !== null && distance > 0) ? distances : null;
+}
+
+function parseSnappedWaypoints(value: unknown, requested: Coordinate[]) {
+  if (value === undefined) return { ok: true as const, coordinates: undefined };
+  if (!Array.isArray(value) || value.length !== requested.length) return { ok: false as const };
+  const coordinates = value.map((waypoint, index) => {
+    if (!isRecord(waypoint)) return null;
+    const coordinate = toCoordinate(waypoint.location);
+    if (!coordinate || coordinateDistanceKm(coordinate, requested[index]) > MAX_ENDPOINT_OFFSET_KM) return null;
+    if (waypoint.distance !== undefined) {
+      const distance = finiteNumber(waypoint.distance);
+      if (distance === null || distance < 0) return null;
+    }
+    return coordinate;
+  });
+  return coordinates.every((point): point is Coordinate => point !== null)
+    ? { ok: true as const, coordinates }
+    : { ok: false as const };
+}
+
+function endpointsCorrespond(geometry: Coordinate[], requested: Coordinate[], snapped?: Coordinate[]) {
+  const startTarget = snapped?.[0] ?? requested[0];
+  const finishTarget = snapped?.at(-1) ?? requested.at(-1);
+  if (!startTarget || !finishTarget) return false;
+  return coordinateDistanceKm(geometry[0], requested[0]) <= MAX_ENDPOINT_OFFSET_KM
+    && coordinateDistanceKm(geometry.at(-1)!, requested.at(-1)!) <= MAX_ENDPOINT_OFFSET_KM
+    && coordinateDistanceKm(geometry[0], startTarget) <= MAX_ENDPOINT_OFFSET_KM
+    && coordinateDistanceKm(geometry.at(-1)!, finishTarget) <= MAX_ENDPOINT_OFFSET_KM;
+}
+
+function distanceMetadataMatches(totalDistanceM: number, legs: number[]) {
+  const legsTotalM = legs.reduce((total, distance) => total + distance, 0);
+  if (!Number.isFinite(legsTotalM)) return false;
+  const toleranceM = Math.max(MAX_DISTANCE_METADATA_ERROR_M, totalDistanceM * MAX_DISTANCE_METADATA_ERROR_RATIO);
+  return Math.abs(totalDistanceM - legsTotalM) <= toleranceM;
+}
+
+function isNondecreasing(values: number[]) {
+  return values.every((value, index) => index === 0 || Number.isFinite(value) && value >= values[index - 1]);
 }
 
 const geometryCache = new Map<string, { expiresAt: number; value: RoutePlan }>();
@@ -138,11 +205,19 @@ function cumulativeDistances(points: Coordinate[]) {
 }
 
 function toCoordinate(value: unknown): Coordinate | null {
-  if (!Array.isArray(value) || value.length < 2) return null;
-  const longitude = Number(value[0]);
-  const latitude = Number(value[1]);
+  if (!Array.isArray(value) || value.length < 2 || typeof value[0] !== 'number' || typeof value[1] !== 'number') return null;
+  const longitude = value[0];
+  const latitude = value[1];
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !isBahrainCoordinate({ latitude, longitude })) return null;
   return { latitude, longitude };
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isBahrainCoordinate(point: Coordinate) {
