@@ -3,6 +3,7 @@ import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polyline, type Region } from "react-native-maps";
 import type { Coordinate, RoadKind } from "./domain";
 import type { MapPreviewProps, MapText } from "./MapPreview";
+import { shouldShowMinimalMapControls } from "./mapPreviewContract";
 import {
   mapIsLoop,
   mapLineModel,
@@ -130,6 +131,7 @@ export function MapPreview({
     userLocation: rtl ? "موقعك الحالي" : "Current location",
     ...mapText,
   };
+  const showMinimalControls = shouldShowMinimalMapControls(compact, minimal);
   const mapStatus = lineModel.status;
   const isLoopRoute = mapIsLoop(route);
   const mapStatusLabel =
@@ -459,7 +461,7 @@ export function MapPreview({
           </Text>
         </Pressable>
       )}
-      {minimal && (
+      {showMinimalControls && (
         <View
           style={[styles.minimalControls, rtl && styles.minimalControlsRtl]}
           accessibilityRole="toolbar"

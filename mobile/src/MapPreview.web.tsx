@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Svg, { Polyline as SvgPolyline } from "react-native-svg";
 import type { Coordinate, RoadKind, RoutePlan } from "./domain";
 import type { MapPreviewProps } from "./MapPreview";
+import { shouldShowMinimalMapControls } from "./mapPreviewContract";
 import {
   mapIsLoop,
   mapLineModel,
@@ -166,6 +167,7 @@ export function MapPreview({
     userLocation: rtl ? "موقعك الحالي" : "Current location",
     ...mapText,
   };
+  const showMinimalControls = shouldShowMinimalMapControls(compact, minimal);
   const isLoopRoute = mapIsLoop(route);
   const mapStatusLabel =
     mapStatus === "matched"
@@ -745,7 +747,7 @@ export function MapPreview({
           </Text>
         </Pressable>
       )}
-      {!compact && minimal && (
+      {showMinimalControls && (
         <View
           style={[styles.minimalControls, rtl && styles.minimalControlsRtl]}
           accessibilityRole="toolbar"
