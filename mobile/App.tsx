@@ -156,6 +156,12 @@ type WebAlertState = {
   buttons: AppAlertButton[];
 };
 
+type RideStartIntent = {
+  routeId: string;
+  mode: "connect";
+  phase: "queued" | "permission-explanation";
+};
+
 const ROUTE_STORAGE_V1_KEY = "ridewind.bahrain.routes.v1";
 const ROUTE_STORAGE_V2_KEY = "ridewind.bahrain.routes.v2";
 const ACTIVITY_STORAGE_KEY = "ridewind.bahrain.activities.v1";
@@ -200,6 +206,14 @@ const SMART_LOOP_TEMPLATES = [
     ],
   },
 ] as const;
+
+function shouldAutoMatchRouteReview(record: RouteRecord) {
+  return (
+    record.geometry.kind === "waypoint_trace" &&
+    (record.geometry.status === "draft" ||
+      record.geometry.status === "unavailable")
+  );
+}
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -260,6 +274,8 @@ export default function App() {
   const [routesHydrated, setRoutesHydrated] = useState(false);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [confirmedRouteId, setConfirmedRouteId] = useState<string | null>(null);
+  const [rideStartIntent, setRideStartIntent] =
+    useState<RideStartIntent | null>(null);
   const [builder, setBuilder] = useState<BuilderRouteState>({
     status: "empty",
     start: null,
@@ -614,6 +630,7 @@ export default function App() {
     });
   };
   const deleteSavedRoutes = () => {
+    setRideStartIntent(null);
     setStoredRouteRecords([]);
     setStoredActivities([]);
     setRouteStorageReady(true);
@@ -1025,9 +1042,8 @@ export default function App() {
       );
     }
   };
-  const connectFromCurrentLocation = async () => {
-    const nbh = recordById(NBH_LOOP.id);
-    if (!nbh || !routeIsNavigable(viewForRecord(nbh, language))) {
+  const beginConnectFromLocation = (route: RouteRecord | null) => {
+    if (!route || !routeIsNavigable(viewForRecord(route, language))) {
       setRouteMessage(
         uiText(
           "previewOnlyRideCopy",
@@ -1036,29 +1052,23 @@ export default function App() {
       );
       return;
     }
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== "granted") {
-        setRouteMessage(t.permissionDenied);
-        return;
-      }
-      const current = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      const coordinate = {
-        latitude: current.coords.latitude,
-        longitude: current.coords.longitude,
-      };
-      setNbhEntryDistanceKm(distanceToRouteEntryKm(NBH_LOOP, coordinate));
-    } catch {
-      setRouteMessage(
-        uiText(
-          "locationUnavailable",
-          "Current location is unavailable. Review the map or choose another route.",
-        ),
-      );
-    }
+    setRecordingOnlyRide(false);
+    setSelectedRouteId(route.id);
+    setConfirmedRouteId(route.id);
+    setDetailRouteId(null);
+    if (route.id === NBH_LOOP.id) setNbhEntryDistanceKm(null);
+    setRideStartIntent({
+      routeId: route.id,
+      mode: "connect",
+      phase: "queued",
+    });
+    setRouteMessage("");
+    setTab("ride");
   };
+  const connectFromCurrentLocation = () =>
+    beginConnectFromLocation(recordById(NBH_LOOP.id));
+  const connectConfirmedRouteFromLocation = () =>
+    beginConnectFromLocation(confirmedRecord);
   const startNbhAtEntry = () => {
     const nbh = recordById(NBH_LOOP.id);
     if (!nbh || !routeIsNavigable(viewForRecord(nbh, language))) {
@@ -1070,12 +1080,14 @@ export default function App() {
       );
       return;
     }
+    setRideStartIntent(null);
     setRecordingOnlyRide(false);
     setSelectedRouteId(NBH_LOOP.id);
     setConfirmedRouteId(NBH_LOOP.id);
     setTab("ride");
   };
   const recordWithoutFollowingNbh = () => {
+    setRideStartIntent(null);
     setRecordingOnlyRide(true);
     setSelectedRouteId(null);
     setConfirmedRouteId(null);
@@ -1261,6 +1273,7 @@ export default function App() {
       );
     const saved = savePersonalRoute(record);
     if ("route" in saved) {
+      setRideStartIntent(null);
       setRecordingOnlyRide(false);
       saveRecord(saved.route);
       setSelectedRouteId(saved.route.id);
@@ -1371,6 +1384,7 @@ export default function App() {
       );
     const saved = savePersonalRoute(record);
     if ("route" in saved) {
+      setRideStartIntent(null);
       setRecordingOnlyRide(false);
       saveRecord(saved.route);
       setSelectedRouteId(saved.route.id);
@@ -1381,18 +1395,14 @@ export default function App() {
   };
 
   const openRouteDetail = (route: RoutePlan) => {
+    setRideStartIntent(null);
     setRecordingOnlyRide(false);
     if (confirmedRouteId !== route.id) setConfirmedRouteId(null);
     setSelectedRouteId(route.id);
     setDetailRouteId(route.id);
     setTab("plan");
     const record = recordById(route.id);
-    if (
-      record &&
-      !(record.geometry.kind === "road_matched" &&
-        record.geometry.status === "ready") &&
-      record.geometry.status !== "matching"
-    )
+    if (record && shouldAutoMatchRouteReview(record))
       void matchRecord(record);
   };
   const selectRoute = (route: RoutePlan) => {
@@ -1418,7 +1428,8 @@ export default function App() {
     setTab("plan");
   };
   const detailRetry = () => {
-    if (detailRecord) void matchRecord(detailRecord);
+    if (detailRecord && shouldAutoMatchRouteReview(detailRecord))
+      void matchRecord(detailRecord);
   };
   const detailAddStop = () => {
     editRoutePoints(detailRecord);
@@ -1477,6 +1488,7 @@ export default function App() {
       !routeIsNavigable(viewForRecord(detailRecord, language))
     )
       return;
+    setRideStartIntent(null);
     setRecordingOnlyRide(false);
     setSelectedRouteId(detailRecord.id);
     setConfirmedRouteId(detailRecord.id);
@@ -1598,6 +1610,47 @@ export default function App() {
     formatAccuracy: liveFormatAccuracy,
     onPosition: undefined,
   });
+  useEffect(() => {
+    if (
+      !rideStartIntent ||
+      rideStartIntent.phase !== "queued" ||
+      tab !== "ride" ||
+      confirmedRouteId !== rideStartIntent.routeId ||
+      rideRecordForHook?.id !== rideStartIntent.routeId
+    )
+      return;
+    setRideStartIntent((current) =>
+      current && current.routeId === rideStartIntent.routeId
+        ? { ...current, phase: "permission-explanation" }
+        : current,
+    );
+    live.prepareStart();
+  }, [
+    confirmedRouteId,
+    live.prepareStart,
+    rideRecordForHook,
+    rideStartIntent,
+    tab,
+  ]);
+  useEffect(() => {
+    if (rideStartIntent && live.state === "active")
+      setRideStartIntent(null);
+  }, [live.state, rideStartIntent]);
+  useEffect(() => {
+    const coordinate = live.position.coordinate;
+    if (
+      live.state !== "active" ||
+      rideRecordForHook?.id !== NBH_LOOP.id ||
+      !coordinate
+    )
+      return;
+    setNbhEntryDistanceKm(distanceToRouteEntryKm(NBH_LOOP, coordinate));
+  }, [
+    live.position.coordinate?.latitude,
+    live.position.coordinate?.longitude,
+    live.state,
+    rideRecordForHook?.id,
+  ]);
   useEffect(() => {
     setLocationPermission(
       live.permission === "granted"
@@ -2212,6 +2265,7 @@ export default function App() {
       onEditPoints={editPlannerPoints}
       onUseMatchedRoute={() => {
         if (builder.route && builder.status === "ready") {
+          setRideStartIntent(null);
           setWorkingRecords((current) => ({
             ...current,
             [builder.route!.id]:
@@ -2283,24 +2337,36 @@ export default function App() {
       privacyMessage={t.foregroundOnly}
       entryLabel={ridePlan?.points[0]?.name}
       onChooseRoute={() => {
+        setRideStartIntent(null);
         setRecordingOnlyRide(false);
         setTab("plan");
       }}
-      onReviewRoute={() =>
-        confirmedRecord &&
-        openRouteDetail(ridePlan ?? routePlanFromRecord(confirmedRecord))
-      }
-      onShowPermissionExplanation={live.prepareStart}
+      onReviewRoute={() => {
+        if (!confirmedRecord) return;
+        setRideStartIntent(null);
+        openRouteDetail(ridePlan ?? routePlanFromRecord(confirmedRecord));
+      }}
+      onShowPermissionExplanation={() => {
+        setRideStartIntent(null);
+        live.prepareStart();
+      }}
       onRequestPermission={live.requestPermissionAndStart}
-      onCancelPermission={live.cancelPermission}
+      onCancelPermission={() => {
+        setRideStartIntent(null);
+        live.cancelPermission();
+      }}
       onOpenSettings={() => setSettingsOpen(true)}
       onRetryPermission={live.retryPermission}
-      onStartRide={live.prepareStart}
-      onConnectFromLocation={live.prepareStart}
+      onStartRide={() => {
+        setRideStartIntent(null);
+        live.prepareStart();
+      }}
+      onConnectFromLocation={connectConfirmedRouteFromLocation}
       onRequestEndRide={live.requestEnd}
       onCancelEndRide={live.cancelEnd}
       onConfirmEndRide={live.confirmEnd}
       onChooseAnotherRoute={() => {
+        setRideStartIntent(null);
         setRecordingOnlyRide(false);
         setConfirmedRouteId(null);
         setTab("plan");
