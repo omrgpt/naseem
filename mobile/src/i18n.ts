@@ -170,9 +170,9 @@ const en = {
   loop: "loop",
   goodWindowTomorrow: "The next good window opens tomorrow at {time}",
   forecastFallback: "Forecast unavailable; using a fallback",
-  confidenceHigh: "high confidence",
-  confidenceMedium: "medium confidence",
-  confidenceLow: "low confidence",
+  confidenceHigh: "High confidence",
+  confidenceMedium: "Medium confidence",
+  confidenceLow: "Low confidence",
   evidenceDetail:
     "Each segment shows its source and confidence for route review.",
   updated: "Updated",
@@ -451,7 +451,7 @@ const en = {
   previewOnlyRideCopy:
     "You can review this route now. Starting a route-following ride will be available after the road check is complete.",
   roadVerificationPending: "Road check not complete",
-  routeVariant: "Variant",
+  routeVariant: "Route option",
   startFinish: "Start / finish",
   sourceEvidence: "Source evidence",
   reviewedRoute: "Reviewed route",
@@ -952,7 +952,7 @@ const ar: typeof en = {
   previewOnlyRideCopy:
     "يمكنك مراجعة هذا المسار الآن. ستتوفر الرحلة التي تتبع الطرق بعد اكتمال فحص الطريق.",
   roadVerificationPending: "لم يتم التحقق من الطرق بعد",
-  routeVariant: "النسخة",
+  routeVariant: "خيار المسار",
   startFinish: "البداية / النهاية",
   sourceEvidence: "دليل المصدر",
   reviewedRoute: "مسار تمت مراجعته",
@@ -1030,5 +1030,34 @@ const ar: typeof en = {
   bahrainNumeralsDecision:
     "تتبع الأوقات إعداد جهازك لنظام ١٢/٢٤ ساعة.",
 };
+
+export type RiderConfidence = "high" | "medium" | "low";
+
+export type RiderVariantOption = {
+  id: string;
+  label: string;
+  labelAr?: string;
+};
+
+export function localizedConfidenceLabel(
+  catalog: typeof en,
+  confidence?: RiderConfidence,
+) {
+  if (confidence === "high") return catalog.confidenceHigh;
+  if (confidence === "medium") return catalog.confidenceMedium;
+  if (confidence === "low") return catalog.confidenceLow;
+  return catalog.locationUncertain;
+}
+
+export function localizedVariantLabel(
+  language: Language,
+  variantId: string | undefined,
+  variants: readonly RiderVariantOption[],
+) {
+  if (!variantId) return undefined;
+  const variant = variants.find((candidate) => candidate.id === variantId);
+  if (!variant) return undefined;
+  return language === "ar" ? variant.labelAr : variant.label;
+}
 
 export const copy = { en, ar };

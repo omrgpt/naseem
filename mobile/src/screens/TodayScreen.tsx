@@ -332,7 +332,7 @@ function EmptyMap({
       >
         {tx(
           t,
-          "emptyMapCopy",
+          "mapEmptyCopy",
           "Your route map will appear here after you choose a route in Plan.",
         )}
       </Text>

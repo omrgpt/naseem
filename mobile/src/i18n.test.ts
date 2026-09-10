@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { copy, directionForLanguage, localeForLanguage } from "./i18n";
+import {
+  copy,
+  directionForLanguage,
+  localeForLanguage,
+  localizedConfidenceLabel,
+  localizedVariantLabel,
+} from "./i18n";
+import { readFileSync } from "node:fs";
 
 const catalogs = {
   en: copy.en as Record<string, string>,
@@ -11,6 +18,7 @@ const placeholderTokens = (value: string) =>
   Array.from(value.matchAll(/\{[^{}]+\}/gu), (match) => match[0]).sort();
 
 const screenCopyKeys = [
+  "mapEmptyCopy",
   "emptyMapLabel",
   "routeCheckPending",
   "routePreviewLabel",
@@ -20,6 +28,16 @@ const screenCopyKeys = [
   "locationAccessNeedsAttention",
   "endRideKeepRecording",
 ] as const;
+
+const todayScreenSource = readFileSync(
+  new URL("./screens/TodayScreen.tsx", import.meta.url),
+  "utf8",
+);
+
+test("Home uses the catalog key for empty-map copy", () => {
+  assert.match(todayScreenSource, /"mapEmptyCopy"/u);
+  assert.doesNotMatch(todayScreenSource, /"emptyMapCopy"/u);
+});
 
 test("English and Arabic copy expose the same non-empty customer catalog", () => {
   assert.deepEqual(Object.keys(catalogs.en).sort(), Object.keys(catalogs.ar).sort());
@@ -93,6 +111,7 @@ test("Arabic map labels and units are localized for RTL presentation", () => {
     "mapGestures",
     "zoomIn",
     "zoomOut",
+    "mapEmptyCopy",
     "emptyMapLabel",
     "routePreviewLabel",
     "previewOnlyRideCopy",
@@ -119,4 +138,27 @@ test("language metadata keeps Bahrain locale and reading direction aligned", () 
   assert.equal(localeForLanguage("ar"), "ar-BH");
   assert.equal(directionForLanguage("en"), "ltr");
   assert.equal(directionForLanguage("ar"), "rtl");
+});
+
+test("rider-facing labels localize confidence and hide unknown variant IDs", () => {
+  assert.equal(localizedConfidenceLabel(copy.en, "high"), "High confidence");
+  assert.equal(localizedConfidenceLabel(copy.ar, "low"), "ثقة منخفضة");
+  assert.equal(localizedConfidenceLabel(copy.en), catalogs.en.locationUncertain);
+
+  const variants = [
+    {
+      id: "nbh-loop-standard-clockwise",
+      label: "Standard clockwise",
+      labelAr: "اتجاه عقارب الساعة القياسي",
+    },
+  ];
+  assert.equal(
+    localizedVariantLabel("en", "nbh-loop-standard-clockwise", variants),
+    "Standard clockwise",
+  );
+  assert.equal(
+    localizedVariantLabel("ar", "nbh-loop-standard-clockwise", variants),
+    "اتجاه عقارب الساعة القياسي",
+  );
+  assert.equal(localizedVariantLabel("en", "internal-variant-id", variants), undefined);
 });

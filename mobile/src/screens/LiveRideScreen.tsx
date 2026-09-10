@@ -5,6 +5,8 @@ import { MapPreview } from "../MapPreview";
 import { RouteLayerLegend } from "../RouteLayerLegend";
 import { ProgressReadout, StatusBadge } from "../UiPatterns";
 import type { ActivityDraft, PositionMatchState } from "../domain";
+import { localizedConfidenceLabel, localizedVariantLabel } from "../i18n";
+import { NBH_PREVIEW_VARIANT } from "../seed";
 import {
   asCanonicalRoute,
   routeIsNavigable,
@@ -404,7 +406,7 @@ export function LiveRideScreen({
                 {screenText(
                   t,
                   "recordWithoutFollowingNbhCopy",
-                  "Record a Naseem ride without NBH route guidance. No route progress will be shown.",
+                  "Record a ride without route guidance. No route progress will be shown.",
                 )}
               </Text>
             </View>
@@ -481,7 +483,7 @@ export function LiveRideScreen({
             {screenText(
               t,
               "recordWithoutFollowingNbhCopy",
-              "Record a Naseem ride without NBH route guidance. No route progress will be shown.",
+              "Record a ride without route guidance. No route progress will be shown.",
             )}
           </Text>
         </View>
@@ -570,7 +572,7 @@ export function LiveRideScreen({
             {position?.match?.confidence && (
               <Text style={[styles.fieldHint, rtl && styles.textRight]}>
                 {screenText(t, "gpsConfidence", "GPS confidence")} ·{" "}
-                {position.match.confidence}
+                {localizedConfidenceLabel(t, position.match.confidence)}
               </Text>
             )}
           </View>
@@ -731,7 +733,7 @@ export function LiveRideScreen({
           style={[styles.primary, !navigable && styles.disabled]}
         >
           <Text style={styles.primaryText}>
-            {screenText(t, "startAtEntry", "Start at NBH entry")}
+            {screenText(t, "startAtEntry", "Start at route entry")}
           </Text>
         </Pressable>
         {onConnectFromLocation && (
@@ -865,13 +867,15 @@ function CompletionPanel({
         "Recording without route guidance",
       );
   const quality =
-    draft.matchQuality === "high"
-      ? screenText(t, "confidenceHigh", "high confidence")
-      : draft.matchQuality === "medium"
-        ? screenText(t, "confidenceMedium", "medium confidence")
-        : draft.matchQuality === "low"
-          ? screenText(t, "confidenceLow", "low confidence")
-          : screenText(t, "locationUncertain", "Location uncertain");
+    localizedConfidenceLabel(
+      t,
+      draft.matchQuality === "unknown" ? undefined : draft.matchQuality,
+    );
+  const variantLabel = localizedVariantLabel(
+    rtl ? "ar" : "en",
+    draft.routeSnapshot?.variantId,
+    [NBH_PREVIEW_VARIANT],
+  );
   const saved = draft.completionState === "saved";
   const failed = draft.completionState === "save_failed";
   const discarded = draft.completionState === "discarded";
@@ -898,10 +902,10 @@ function CompletionPanel({
           )}
         </Text>
       )}
-      {draft.routeSnapshot?.variantId && (
+      {variantLabel && (
         <Text style={[styles.fieldHint, rtl && styles.textRight]}>
-          {screenText(t, "routeVariant", "Variant")}:{" "}
-          {draft.routeSnapshot.variantId}
+          {screenText(t, "routeVariant", "Route option")}:{" "}
+          {variantLabel}
         </Text>
       )}
       <View style={[styles.metricRail, rtl && styles.rtlRow]}>
@@ -928,8 +932,10 @@ function CompletionPanel({
       {draft.forecastSnapshot && (
         <Text style={[styles.fieldHint, rtl && styles.textRight]}>
           {screenText(t, "forecastSnapshot", "Forecast snapshot")} ·{" "}
-          {draft.forecastSnapshot.confidence ??
-            screenText(t, "confidenceLow", "low confidence")}
+          {localizedConfidenceLabel(
+            t,
+            draft.forecastSnapshot.confidence ?? "low",
+          )}
         </Text>
       )}
       {saved && (
