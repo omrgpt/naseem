@@ -72,7 +72,7 @@ const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
     recordingOnly: "Recording without a planned route",
   },
   ar: {
-    title: "حسابك",
+    title: "ملفك المحلي",
     subtitle: "مساراتك ورحلاتك وتفضيلاتك.",
     rider: "راكب",
     routesTitle: "مساراتي",
@@ -88,7 +88,7 @@ const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
     emptyRidesHint: "أكمل رحلة واختر حفظ الرحلة لتظهر هنا.",
     connectionsPrivacyTitle: "الاتصالات والخصوصية",
     connectionsPrivacyHint: "سجل اختياري وأدوات للخصوصية.",
-    historyTitle: "سجل Strava (اختياري)",
+    historyTitle: "سجل رحلات Strava (اختياري)",
     historyDescription:
       "استورد رحلاتك السابقة بعد اختيار الربط. ولا يوفر موقعك المباشر لنسيم.",
     noConnection: "لا يوجد اتصال بسجل الرحلات.",
@@ -125,7 +125,7 @@ export function ProfileScreen({
   const visibleImports = imports?.items.length ? imports : undefined;
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, rtl && styles.screenRtl]}>
       <View style={styles.intro}>
         <Text style={[styles.title, rtl && styles.textRight]}>
           {text.title}
@@ -438,7 +438,9 @@ function ConnectionRow({
   onPress?: ProfileScreenProps["onConnectionAction"];
 }) {
   const title = connection
-    ? `${connection.providerLabel} ${rtl ? "(اختياري)" : "history (optional)"}`
+    ? rtl
+      ? `سجل رحلات ${connection.providerLabel} (اختياري)`
+      : `${connection.providerLabel} history (optional)`
     : text.historyTitle;
   const description = connection
     ? [connection.statusLabel, text.historyDescription]
