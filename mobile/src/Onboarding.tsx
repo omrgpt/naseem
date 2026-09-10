@@ -154,7 +154,7 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
     namePlaceholder: 'e.g. Dana',
     nameHelp: 'Use a name or nickname. You can edit it later.',
     nameRequired: 'Add a rider name so we know what to call you.',
-    nameTooLong: 'Keep the rider name under 40 characters.',
+    nameTooLong: 'Keep the rider name under {max} characters.',
     experienceLabel: 'How do you ride?',
     experienceRequired: 'Choose the closest match for your current riding.',
     experience: { new: 'Finding my rhythm', regular: 'Regular rider', endurance: 'Endurance focused' },
@@ -222,7 +222,7 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
     namePlaceholder: 'مثال: دانا',
     nameHelp: 'استخدم اسماً أو لقباً. يمكنك تعديله لاحقاً.',
     nameRequired: 'أضف اسم الراكب لنعرف كيف نخاطبك.',
-    nameTooLong: 'اجعل الاسم أقل من 40 حرفاً.',
+    nameTooLong: 'اجعل الاسم أقل من {max} حرفاً.',
     experienceLabel: 'كيف تركب؟',
     experienceRequired: 'اختر الوصف الأقرب لركوبك الحالي.',
     experience: { new: 'أبحث عن إيقاعي', regular: 'أركب بانتظام', endurance: 'أركز على التحمل' },
@@ -268,6 +268,33 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
   },
 };
 
+const MAX_RIDER_NAME_LENGTH = 40;
+const MILES_PER_KILOMETRE = 0.621371192237334;
+
+export function formatOnboardingDistance(
+  distanceKm: number,
+  distanceUnit: DistanceUnit,
+  locale: string,
+  labels: Pick<OnboardingCopy, 'km' | 'mi'>,
+): string {
+  const value = distanceUnit === 'mi' ? distanceKm * MILES_PER_KILOMETRE : distanceKm;
+  const unitLabel = distanceUnit === 'mi' ? labels.mi : labels.km;
+  return `${formatNumber(value, locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${unitLabel}`;
+}
+
+export function formatOnboardingProgress(template: string, step: number, total: number, locale: string): string {
+  return template
+    .replace('{step}', formatNumber(step, locale))
+    .replace('{total}', formatNumber(total, locale));
+}
+
+export type OnboardingChevronDirection = 'back' | 'forward';
+
+export function onboardingChevronRotation(rtl: boolean, direction: OnboardingChevronDirection): '0deg' | '180deg' {
+  const pointsRight = direction === 'back' ? rtl : !rtl;
+  return pointsRight ? '0deg' : '180deg';
+}
+
 export type OnboardingProps = {
   palette?: Palette;
   language?: Language;
@@ -296,11 +323,16 @@ export function createOnboardingData(initialData?: Partial<OnboardingData>): Onb
   };
 }
 
-export function validateOnboardingStep(step: number, data: OnboardingData, text: OnboardingCopy = ONBOARDING_COPY.en): string | null {
+export function validateOnboardingStep(
+  step: number,
+  data: OnboardingData,
+  text: OnboardingCopy = ONBOARDING_COPY.en,
+  locale: string = localeForLanguage('en'),
+): string | null {
   if (step === 1) {
     const name = data.displayName.trim();
     if (!name) return text.nameRequired;
-    if (name.length > 40) return text.nameTooLong;
+    if (name.length > MAX_RIDER_NAME_LENGTH) return text.nameTooLong.replace('{max}', formatNumber(MAX_RIDER_NAME_LENGTH, locale));
     if (!data.experience) return text.experienceRequired;
   }
   if (step === 2) {
@@ -353,7 +385,7 @@ export function Onboarding({
   const locale = localeForLanguage(language);
   const hour12 = new Intl.DateTimeFormat(locale, { hour: 'numeric' }).resolvedOptions().hour12 ?? language === 'en';
   const signalTime = copy?.signalTime || formatBahrainTime(departureInstant('tomorrow'), locale, { hour12 });
-  const signalDistance = copy?.signalDistance || `${language === 'ar' ? NBH_CUSTOMER_NAMES.arabic : NBH_CUSTOMER_NAMES.short} · ${formatNumber(NBH_PREVIEW_DISTANCE_KM, locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ${language === 'ar' ? 'كم' : 'km'}`;
+  const signalDistance = copy?.signalDistance || `${language === 'ar' ? NBH_CUSTOMER_NAMES.arabic : NBH_CUSTOMER_NAMES.short} · ${formatOnboardingDistance(NBH_PREVIEW_DISTANCE_KM, data.distanceUnit, locale, text)}`;
 
   useEffect(() => {
     setErrors((current) => ({ ...current, [stepKey]: undefined }));
@@ -384,7 +416,7 @@ export function Onboarding({
   const handleSkip = () => { void complete(true); };
 
   const handleNext = () => {
-    const error = validateOnboardingStep(step, data, text);
+    const error = validateOnboardingStep(step, data, text, locale);
     if (error) {
       setErrors((current) => ({ ...current, [stepKey]: error }));
       scrollRef.current?.scrollTo({ y: 0, animated: true });
@@ -437,7 +469,7 @@ export function Onboarding({
                 accessibilityHint={isRtl ? 'العودة إلى الخطوة السابقة' : 'Return to the previous step'}
                 disabled={submitting}
                 onPress={handleBack}
-                style={({ pressed }) => [styles.backButton, { opacity: submitting ? 0.45 : pressed ? 0.68 : 1 }]}
+                style={({ pressed }) => [styles.backButton, { opacity: submitting ? 0.45 : pressed ? 0.68 : 1 }, isRtl && styles.rowReverse]}
                 testID={`${testID}-back`}
               >
                 <View style={styles.backIcon}><Icon name="chevron" color={palette.ink} size={15} /></View>
@@ -466,10 +498,10 @@ export function Onboarding({
 
         <View style={styles.progressWrap} accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: TOTAL_STEPS, now: step + 1 }}>
           <View style={[styles.progressHeader, isRtl && styles.rowReverse]}>
-            <Text style={styles.progressText}>{text.stepOf.replace('{step}', String(step + 1)).replace('{total}', String(TOTAL_STEPS))}</Text>
+            <Text style={styles.progressText}>{formatOnboardingProgress(text.stepOf, step + 1, TOTAL_STEPS, locale)}</Text>
             <Text style={styles.progressText}>{text.privatePilot}</Text>
           </View>
-          <View style={[styles.progressTrack, { backgroundColor: palette.line }]}>
+          <View style={[styles.progressTrack, { backgroundColor: palette.line }, isRtl && styles.rowReverse]}>
             <View style={[styles.progressFill, { backgroundColor: palette.accent, width: `${((step + 1) / TOTAL_STEPS) * 100}%` }]} />
           </View>
         </View>
@@ -579,7 +611,7 @@ function ProfileStep({
         value={data.displayName}
         onChangeText={(value) => updateData('displayName', value)}
         helperText={text.nameHelp}
-        error={error && (!data.displayName.trim() || data.displayName.length > 40) ? error : undefined}
+        error={error && (!data.displayName.trim() || data.displayName.length > MAX_RIDER_NAME_LENGTH) ? error : undefined}
         palette={palette}
         rtl={rtl}
         autoCapitalize="words"
@@ -707,7 +739,7 @@ function GoalsStep({
               onPress={() => updateData('distanceUnit', unit)}
               style={({ pressed }) => [styles.unitButton, { borderColor: data.distanceUnit === unit ? palette.accent : palette.line, backgroundColor: data.distanceUnit === unit ? palette.accentSoft : palette.panel, opacity: pressed ? 0.78 : 1 }]}
             >
-              <Text style={[styles.unitText, { color: data.distanceUnit === unit ? palette.accent : palette.muted }, rtl && styles.arabicMedium]}>{rtl ? (unit === 'km' ? 'كم' : 'ميل') : unit.toUpperCase()}</Text>
+              <Text style={[styles.unitText, { color: data.distanceUnit === unit ? palette.accent : palette.muted }, rtl && styles.arabicMedium]}>{unit === 'km' ? text.km : text.mi}</Text>
             </Pressable>
           ))}
         </View>
@@ -774,7 +806,7 @@ function PermissionsStep({
         style={({ pressed }) => [styles.privacyLink, { opacity: !onOpenPrivacy ? 0.55 : pressed ? 0.68 : 1 }, rtl && styles.rowReverse]}
       >
         <Text style={[styles.privacyLinkText, { color: palette.accent }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{text.openPrivacy}</Text>
-        <Icon name="chevron" color={palette.accent} size={14} />
+        <View style={{ transform: [{ rotate: onboardingChevronRotation(rtl, 'forward') }] }}><Icon name="chevron" color={palette.accent} size={14} /></View>
       </Pressable>
       <Pressable
         accessibilityRole="checkbox"
@@ -840,7 +872,7 @@ function FloatingLabelInput({
           autoCapitalize={autoCapitalize}
           autoCorrect
           blurOnSubmit
-          maxLength={40}
+          maxLength={MAX_RIDER_NAME_LENGTH}
           onBlur={() => setFocused(false)}
           onChangeText={onChangeText}
           onFocus={() => setFocused(true)}
@@ -946,7 +978,7 @@ function OnboardingButton({ label, icon, onPress, palette, rtl, disabled = false
     >
       <View style={[styles.actionIcon, { backgroundColor: palette.accentSoft }]}>{loading ? <View style={[styles.loadingDot, { borderColor: palette.accent, borderTopColor: 'transparent' }]} /> : <Icon name={icon} color={palette.ink} size={17} />}</View>
       <Text style={[styles.actionText, { color: palette.bg }, rtl && styles.textRight, rtl && styles.arabicMedium]}>{label}</Text>
-      <View style={[styles.actionArrow, { backgroundColor: palette.bg }]}><Icon name="chevron" color={palette.ink} size={14} /></View>
+      <View style={[styles.actionArrow, { backgroundColor: palette.bg, transform: [{ rotate: onboardingChevronRotation(rtl, 'forward') }] }]}><Icon name="chevron" color={palette.ink} size={14} /></View>
     </Pressable>
   );
 }
@@ -962,7 +994,7 @@ const baseStyles = StyleSheet.create({
   brandDot: { width: 9, height: 9, borderRadius: 5 },
   brandText: { color: DARK.ink, fontFamily: FONT_EXTRABOLD, fontSize: 13, letterSpacing: 2.2 },
   backButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  backIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: DARK.panelAlt, transform: [{ rotate: '180deg' }] },
+  backIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: DARK.panelAlt },
   backText: { color: DARK.ink, fontFamily: FONT_SEMIBOLD, fontSize: 12 },
   skipButton: { minHeight: 44, justifyContent: 'center' },
   skipText: { color: DARK.muted, fontFamily: FONT_MEDIUM, fontSize: 12, textDecorationLine: 'underline', textDecorationColor: DARK.muted },
@@ -1076,7 +1108,7 @@ function createStyles(palette: Palette, rtl: boolean) {
     ...baseStyles,
     root: [baseStyles.root, { backgroundColor: palette.bg }],
     brandText: [baseStyles.brandText, { color: palette.ink }],
-    backIcon: [baseStyles.backIcon, { backgroundColor: palette.panelAlt }],
+    backIcon: [baseStyles.backIcon, { backgroundColor: palette.panelAlt, transform: [{ rotate: onboardingChevronRotation(rtl, 'back') }] }],
     backText: [baseStyles.backText, { color: palette.ink, fontFamily: rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM }],
     skipText: [baseStyles.skipText, { color: palette.muted, textDecorationColor: palette.muted, fontFamily: rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM }],
     progressText: [baseStyles.progressText, { color: palette.muted, fontFamily: rtl ? FONT_ARABIC_BOLD : FONT_BOLD }],
