@@ -17,15 +17,20 @@ export type MapLineModel = {
   status: MapGeometryStatus;
 };
 
+type RouteWithGeometryMetadata = RoutePlan & {
+  geometryKind?: 'road_matched' | 'recorded_trace' | 'waypoint_trace' | 'none';
+};
+
 /** Dense geometry is the only road-following line the map is allowed to draw. */
 export function mapLinePoints(route: RoutePlan): Coordinate[] {
   return route.geometry?.length ? route.geometry : route.points;
 }
 
 export function mapLineModel(route: RoutePlan, requestedStatus?: MapGeometryStatus): MapLineModel {
+  const roadMatched = hasRoadMatchedGeometry(route);
   return {
     linePoints: mapLinePoints(route),
-    roadMatched: Boolean(route.geometry?.length),
+    roadMatched,
     status: mapGeometryStatus(route, requestedStatus),
   };
 }
@@ -36,8 +41,10 @@ export function mapLineModel(route: RoutePlan, requestedStatus?: MapGeometryStat
  * make a waypoint trace look like road-following geometry.
  */
 export function mapGeometryStatus(route: RoutePlan, requestedStatus?: MapGeometryStatus): MapGeometryStatus {
-  // The supplied NBH preview is intentionally drawable but is not a verified
-  // road-following route. Other routes preserve the existing geometry rule.
+  // A supplied or recorded trace is drawable, but it is not road-following
+  // geometry. Canonical review views carry this metadata explicitly; the
+  // family fallback keeps older catalog plans honest as previews too.
+  if (!hasRoadMatchedGeometry(route)) return requestedStatus === 'loading' ? 'loading' : 'pilot';
   if (requestedStatus === 'pilot' && route.familyId === 'nbh-loop') return 'pilot';
   if (route.geometry?.length) return 'matched';
   return requestedStatus === 'loading' ? 'loading' : 'pilot';
@@ -89,7 +96,7 @@ export function normalizeSelectedSegment(selectedSegment?: number) {
 export function mapMarkerPoints(
   route: RoutePlan,
   linePoints: Coordinate[] = mapLinePoints(route),
-  roadMatched = Boolean(route.geometry?.length),
+  roadMatched = hasRoadMatchedGeometry(route),
   maxMarkers = 8,
 ): MapMarker[] {
   const isLoop = mapIsLoop(route);
@@ -110,6 +117,11 @@ export function mapMarkerPoints(
       : routePoint;
     return { coordinate, routePoint, sourceIndex, isStart, isEnd, isLoop };
   });
+}
+
+function hasRoadMatchedGeometry(route: RoutePlan) {
+  const kind = (route as RouteWithGeometryMetadata).geometryKind;
+  return Boolean(route.geometry?.length) && (kind === undefined || kind === 'road_matched');
 }
 
 function sampleIndexes(length: number, maximum: number) {

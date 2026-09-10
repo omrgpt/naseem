@@ -48,6 +48,22 @@ test('a stale matched request stays a preview when dense geometry is absent', ()
   assert.equal(mapLineModel({ ...baseRoute }, 'matched').status, 'pilot');
 });
 
+test('recorded geometry stays a dashed preview even when it has coordinates', () => {
+  const route = {
+    ...baseRoute,
+    geometry: [
+      { latitude: 26.2, longitude: 50.6 },
+      { latitude: 26.22, longitude: 50.61 },
+      { latitude: 26.2, longitude: 50.6 },
+    ],
+    geometryKind: 'recorded_trace' as const,
+  };
+
+  assert.equal(mapLineModel(route, 'matched').roadMatched, false);
+  assert.equal(mapLineModel(route, 'matched').status, 'pilot');
+  assert.deepEqual(mapMarkerPoints(route)[0]?.coordinate, route.points[0]);
+});
+
 test('loop markers represent the shared start and finish once', () => {
   const markers = mapMarkerPoints(baseRoute, baseRoute.points, false, 8);
   const startCoordinate = baseRoute.points[0];
