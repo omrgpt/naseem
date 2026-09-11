@@ -392,6 +392,31 @@ test('canonical readiness reconciles point, leg, geometry, and routed distance e
   assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, points: valid.points.map((point, index) => ({ ...point, distanceKm: index === 0 ? 0 : 2 })) }), false);
   assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, legDistancesKm: [2] } as typeof valid & { legDistancesKm: number[] }), false);
   assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, routedDistanceKm: 2 } as typeof valid & { routedDistanceKm: number }), false);
+  assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, routedDistanceKm: 1.4, distanceKm: 9.9 } as typeof valid & { routedDistanceKm: number }), false);
+  assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, routedDistanceKm: null } as unknown as typeof valid), false);
+});
+
+test('canonical readiness rejects an intermediate waypoint that is not on returned geometry', () => {
+  const route = {
+    ...NBH_LOOP,
+    id: 'off-geometry-waypoint',
+    points: [
+      { ...NBH_LOOP.points[0], ...start, distanceKm: 0 },
+      { ...NBH_LOOP.points[1], latitude: 26.105, longitude: 50.52, distanceKm: 0.7 },
+      { ...NBH_LOOP.points[2], ...finish, distanceKm: 1.4 },
+    ],
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'ready' as const,
+    distanceStatus: 'authoritative' as const,
+    geometry: [start, { latitude: 26.105, longitude: 50.505 }, finish],
+    geometryDistancesKm: [0, 0.7, 1.4],
+    legDistancesKm: [0.7, 0.7],
+    routedDistanceKm: 1.4,
+    distanceKm: 1.4,
+    geometrySource: 'licensed road matcher',
+  };
+
+  assert.equal(routePlanHasAuthoritativeGeometry(route), false);
 });
 
 test('incomplete ready road metadata is downgraded to an unavailable waypoint trace', () => {
@@ -423,6 +448,28 @@ test('incomplete ready road metadata is downgraded to an unavailable waypoint tr
   assert.equal(plan.geometryKind, 'waypoint_trace');
   assert.equal(plan.geometryStatus, 'unavailable');
   assert.equal(plan.distanceStatus, 'provisional');
+});
+
+test('implicit invalid-ready records clear stale analysis during downgrade', () => {
+  const record = routeRecordFromPlan({
+    ...NBH_LOOP,
+    id: 'implicit-invalid-ready-route',
+    geometry: undefined,
+    geometryDistancesKm: undefined,
+    geometrySource: undefined,
+    durationMinutes: 34,
+    recommendation: 'Stale route analysis',
+  }, {
+    origin: 'generated',
+    ownership: 'personal',
+    geometry: { kind: 'road_matched', status: 'ready', source: 'reviewed road geometry' },
+    roadEvidenceStatus: 'sourced',
+    provenance: { source: 'Generated candidate' },
+  });
+
+  assert.equal(record.geometry.kind, 'waypoint_trace');
+  assert.equal(record.geometry.status, 'unavailable');
+  assert.equal(record.analysis, undefined);
 });
 
 test('reverse returns a clear unavailable result for a shared-start loop and a new draft for distinct endpoints', () => {
@@ -506,6 +553,81 @@ test('personal copies do not inherit catalog identity and catalog/personal ID co
   assert.throws(() => createRouteRepository([catalog, collision]), /distinct route identity/);
   const identityCollision = { ...catalog, id: 'another-route-id' };
   assert.throws(() => createRouteRepository([catalog, identityCollision]), /distinct route identity/);
+});
+
+test('repository ingress validates known NBH identity and corridor linkage', () => {
+  const catalog = routeRecordFromPlan(NBH_LOOP, {
+    origin: 'pilot',
+    ownership: 'catalog',
+    geometry: { kind: 'recorded_trace', status: 'ready', source: 'Supplied route preview geometry' },
+    roadEvidenceStatus: 'pilot_pending',
+    provenance: { source: 'Bahrain Tourism' },
+  });
+
+  assert.throws(
+    () => createRouteRepository([{ ...catalog, id: 'invalid-ingress-identity', variantId: 'wrong-variant' }]),
+    /family\/variant\/revision/,
+  );
+  assert.throws(
+    () => createRouteRepository([{ ...catalog, id: 'invalid-ingress-corridor', corridor: { ...catalog.corridor!, revisionId: 'wrong-revision' } }]),
+    /corridor|variant revision/,
+  );
+
+  const repository = createRouteRepository([catalog]);
+  assert.throws(
+    () => repository.upsert({ ...catalog, id: 'invalid-upsert-identity', variantId: 'wrong-variant' }),
+    /family\/variant\/revision/,
+  );
+  assert.throws(
+    () => repository.upsert({ ...catalog, id: 'invalid-upsert-corridor', corridor: { ...catalog.corridor!, revisionId: 'wrong-revision' } }),
+    /corridor|variant revision/,
+  );
+  assert.throws(
+    () => createRouteRepository([{ ...catalog, id: 'personal-catalog-identity', ownership: 'personal', origin: 'drawn' }]),
+    /personal|identity/,
+  );
+  assert.throws(
+    () => createRouteRepository([{ ...routeRecord(), id: 'invalid-revision', revision: 0 }]),
+    /positive integer/,
+  );
+});
+
+test('repository savePersonal matches lifecycle catalog-copy origin and identity semantics', () => {
+  const catalog = routeRecordFromPlan(NBH_LOOP, {
+    origin: 'pilot',
+    ownership: 'catalog',
+    geometry: { kind: 'recorded_trace', status: 'ready', source: 'Supplied route preview geometry' },
+    roadEvidenceStatus: 'pilot_pending',
+    provenance: { source: 'Bahrain Tourism' },
+  });
+  const repository = createRouteRepository([catalog]);
+  const repositoryCopy = repository.savePersonal(catalog);
+  const lifecycleState = savePersonalRoute(catalog);
+  assert.equal(lifecycleState.state, 'saved-personal');
+  if (lifecycleState.state !== 'saved-personal') throw new Error('Expected lifecycle catalog copy');
+
+  assert.deepEqual(
+    {
+      id: repositoryCopy.id,
+      ownership: repositoryCopy.ownership,
+      origin: repositoryCopy.origin,
+      familyId: repositoryCopy.familyId,
+      variantId: repositoryCopy.variantId,
+      revisionId: repositoryCopy.revisionId,
+      revision: repositoryCopy.revision,
+      sourceId: repositoryCopy.provenance.sourceId,
+    },
+    {
+      id: lifecycleState.route.id,
+      ownership: lifecycleState.route.ownership,
+      origin: lifecycleState.route.origin,
+      familyId: lifecycleState.route.familyId,
+      variantId: lifecycleState.route.variantId,
+      revisionId: lifecycleState.route.revisionId,
+      revision: lifecycleState.route.revision,
+      sourceId: lifecycleState.route.provenance.sourceId,
+    },
+  );
 });
 
 test('reversing a catalog route creates a personal draft with a fresh identity', () => {

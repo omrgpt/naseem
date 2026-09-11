@@ -23,8 +23,10 @@ const STALE_AFTER_MS = 90_000;
 export function matchRoutePosition(route: RoutePlan, coordinate: Coordinate, options: MatchOptions = {}): PositionMatch {
   const timestamp = toIso(options.timestamp ?? new Date());
   if (!routePlanHasAuthoritativeGeometry(route)) return unavailableMatch(timestamp, options.accuracyMeters);
+  const canonicalDistanceKm = route.routedDistanceKm ?? route.distanceKm;
+  const progressRoute = route.routedDistanceKm === undefined ? route : { ...route, distanceKm: canonicalDistanceKm };
   const previous = options.previous;
-  const raw = routeProgress(route, coordinate, 0);
+  const raw = routeProgress(progressRoute, coordinate, 0);
   const accuracyMeters = options.accuracyMeters;
   const entryDistanceKm = distanceKm(coordinate, route.points[0]);
   const loopAtEntry = isLoop(route) && entryDistanceKm <= Math.max(0.12, (accuracyMeters ?? 0) / 1_000);
@@ -36,7 +38,7 @@ export function matchRoutePosition(route: RoutePlan, coordinate: Coordinate, opt
   let progress = raw.progress;
   if (state === 'off-corridor' || state === 'stale' || state === 'uncertain') progress = previous?.progress ?? 0;
   const confidence: Confidence = state === 'matched' && (accuracyMeters ?? 0) <= 25 ? 'high' : state === 'off-corridor' || state === 'stale' ? 'low' : 'medium';
-  return { routeDistanceKm: Math.max(0, progress * Math.max(route.distanceKm, 1)), progress, confidence, state, ...(accuracyMeters !== undefined ? { accuracyMeters } : {}), candidateCount, timestamp, offCorridorKm: raw.offRouteKm };
+  return { routeDistanceKm: Math.max(0, progress * Math.max(canonicalDistanceKm, 1)), progress, confidence, state, ...(accuracyMeters !== undefined ? { accuracyMeters } : {}), candidateCount, timestamp, offCorridorKm: raw.offRouteKm };
 }
 
 export function createStatefulRouteMatcher(route: RoutePlan): StatefulRouteMatcher {

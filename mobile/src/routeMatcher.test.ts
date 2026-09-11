@@ -99,3 +99,21 @@ test('ready road metadata with invalid geometry endpoints cannot produce a posit
   assert.equal(result.candidateCount, 0);
   assert.equal(result.routeDistanceKm, 0);
 });
+
+test('position matcher uses the routed total as the canonical progress distance', () => {
+  const base = readyRoadRoute();
+  const route = {
+    ...base,
+    points: base.points.slice(0, 4),
+    geometry: base.geometry?.slice(0, 4),
+    geometryDistancesKm: base.geometryDistancesKm?.slice(0, 4),
+    distanceKm: 17.4,
+    routedDistanceKm: 17.499,
+  };
+
+  const result = matchRoutePosition(route, route.points.at(-1)!, { accuracyMeters: 10, timestamp: '2026-09-10T14:40:00Z' });
+
+  assert.equal(result.state, 'matched');
+  assert.equal(result.progress, 1);
+  assert.equal(result.routeDistanceKm, 17.499);
+});

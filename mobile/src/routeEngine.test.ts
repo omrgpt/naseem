@@ -85,6 +85,43 @@ test('invalid ready-road geometry is downgraded when final metrics are removed',
   assert.equal(result.arrivalAt, undefined);
 });
 
+test('invalid ready-road downgrade does not reuse a stale routed scalar as provisional distance', () => {
+  const invalidReadyRoad = {
+    ...route,
+    distanceKm: 99,
+    routedDistanceKm: 10,
+    geometry: [
+      { latitude: 26.4, longitude: 50.8 },
+      { latitude: 26.41, longitude: 50.81 },
+    ],
+    geometryDistancesKm: [0, 10],
+  };
+
+  const result = analyseRoute(invalidReadyRoad, 26, 0, undefined, [], new Date('2026-09-10T14:40:00Z'));
+
+  assert.equal(result.geometryStatus, 'unavailable');
+  assert.equal(result.distanceKm, result.provisionalDistanceKm);
+  assert.ok(result.distanceKm < 20);
+});
+
+test('analysis cleanup preserves legitimate pending road matching and draft states', () => {
+  for (const geometryStatus of ['matching', 'draft'] as const) {
+    const pending = {
+      ...route,
+      geometryStatus,
+      durationMinutes: 25,
+      departureAt: '2026-09-10T14:40:00.000Z',
+      arrivalAt: '2026-09-10T15:05:00.000Z',
+    };
+    const result = analyseRoute(pending, 26, 0, undefined, [], new Date('2026-09-10T14:40:00Z'));
+    assert.equal(result.geometryKind, 'road_matched');
+    assert.equal(result.geometryStatus, geometryStatus);
+    assert.equal(result.durationMinutes, 0);
+    assert.equal(result.departureAt, undefined);
+    assert.equal(result.arrivalAt, undefined);
+  }
+});
+
 test('recorded traces retain named preview sections but suppress final ETA and wind split', () => {
   const recorded = {
     ...route,

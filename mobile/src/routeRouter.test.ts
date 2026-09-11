@@ -139,6 +139,10 @@ test('road matcher enforces the configured geometry point cap', async () => {
   }
 });
 
+test('router keeps the documented 7000-point geometry cap', () => {
+  assert.equal(routerConfig.maxGeometryPoints, 7_000);
+});
+
 test('router fingerprints retain request precision instead of merging nearby routes', async () => {
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -210,6 +214,56 @@ test('router cache does not reuse one route identity for another route with the 
     assert.equal(cached?.geometryKind, 'road_matched');
     assert.equal(cached?.distanceStatus, 'authoritative');
     assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearRouteGeometryCache();
+  }
+});
+
+test('road rematching clears stale ETA, wind, and recommendation metrics on cache hits', async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      code: 'Ok',
+      waypoints: NBH_LOOP.points.map((point) => ({ location: [point.longitude, point.latitude], distance: 0 })),
+      routes: [{
+        distance: 21_800,
+        duration: 3_600,
+        legs: [{ distance: 4_300, duration: 700 }, { distance: 6_200, duration: 900 }, { distance: 7_000, duration: 1_100 }, { distance: 4_300, duration: 900 }],
+        geometry: { type: 'LineString', coordinates: [
+          [50.4983, 25.9888], [50.51, 26.002], [50.53, 26.015], [50.54, 25.98],
+          [50.54, 25.96], [50.50, 25.955], [50.47, 25.96], [50.48, 25.98], [50.4983, 25.9888],
+        ] },
+      }],
+    }), { status: 200 });
+  }) as typeof fetch;
+  const routeId = 'rematched-metrics-route';
+  try {
+    const first = await resolveRoadGeometry({ ...NBH_LOOP, id: routeId });
+    assert.ok(first);
+    const rematched = await resolveRoadGeometry({
+      ...NBH_LOOP,
+      id: routeId,
+      departureAt: '2026-09-10T14:40:00Z',
+      arrivalAt: '2026-09-10T15:40:00Z',
+      departureLabel: '14:40',
+      arrivalLabel: '15:40',
+      durationMinutes: 60,
+      recommendation: 'Use this stale analysis',
+      segments: [{ id: 'stale-segment', ...NBH_LOOP.points.slice(1, 2)[0], arrivalAt: '2026-09-10T15:00:00Z', arrivalLabel: '15:00', wind: { kind: 'tailwind', magnitudeKph: 3, headwindKph: 0, crosswindKph: 0 }, insight: 'stale' }],
+      windSummary: { tailwindPercent: 80, headwindPercent: 10, crosswindPercent: 10 },
+    });
+    assert.ok(rematched);
+    assert.equal(calls, 1);
+    assert.equal(rematched.departureAt, undefined);
+    assert.equal(rematched.arrivalAt, undefined);
+    assert.equal(rematched.departureLabel, '');
+    assert.equal(rematched.arrivalLabel, '');
+    assert.equal(rematched.durationMinutes, 0);
+    assert.equal(rematched.recommendation, '');
+    assert.deepEqual(rematched.segments, []);
+    assert.deepEqual(rematched.windSummary, { tailwindPercent: 0, headwindPercent: 0, crosswindPercent: 0 });
   } finally {
     globalThis.fetch = originalFetch;
     clearRouteGeometryCache();
@@ -383,6 +437,66 @@ test('road matcher rejects cumulative geometry distance that disagrees with the 
   }), { status: 200 })) as typeof fetch;
   try {
     assert.equal(await resolveRoadGeometry(NBH_LOOP), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearRouteGeometryCache();
+  }
+});
+
+test('road matcher rejects snapped waypoint distance metadata that disagrees with request-to-snap distance', async () => {
+  const points = [
+    { ...NBH_LOOP.points[0], latitude: 26.1, longitude: 50.5, distanceKm: 0 },
+    { ...NBH_LOOP.points[1], latitude: 26.11, longitude: 50.5, distanceKm: 1.13 },
+  ];
+  const route = { ...NBH_LOOP, id: 'snapped-distance-metadata-route', points };
+  const snappedStart = [50.5018, 26.1];
+  const snappedFinish = [50.5, 26.11];
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 'Ok',
+    waypoints: [
+      { location: snappedStart, distance: 0 },
+      { location: snappedFinish, distance: 0 },
+    ],
+    routes: [{
+      distance: 1_130,
+      duration: 60,
+      legs: [{ distance: 1_130, duration: 60 }],
+      geometry: { type: 'LineString', coordinates: [snappedStart, snappedFinish] },
+    }],
+  }), { status: 200 })) as typeof fetch;
+  try {
+    assert.equal(await resolveRoadGeometry(route), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearRouteGeometryCache();
+  }
+});
+
+test('road matcher rejects distinct positive short legs that collapse to one snapped position', async () => {
+  const points = [
+    { ...NBH_LOOP.points[0], latitude: 26.1, longitude: 50.5, distanceKm: 0 },
+    { ...NBH_LOOP.points[1], latitude: 26.101, longitude: 50.5, distanceKm: 0.111 },
+    { ...NBH_LOOP.points[2], latitude: 26.1011, longitude: 50.5, distanceKm: 0.122 },
+  ];
+  const route = { ...NBH_LOOP, id: 'collapsed-short-leg-route', points };
+  const start = [50.5, 26.1];
+  const collapsed = [50.5, 26.101];
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    code: 'Ok',
+    waypoints: [
+      { location: start, distance: 0 },
+      { location: collapsed, distance: 0 },
+      { location: collapsed, distance: 11 },
+    ],
+    routes: [{
+      distance: 122,
+      duration: 30,
+      legs: [{ distance: 111, duration: 15 }, { distance: 11, duration: 15 }],
+      geometry: { type: 'LineString', coordinates: [start, collapsed] },
+    }],
+  }), { status: 200 })) as typeof fetch;
+  try {
+    assert.equal(await resolveRoadGeometry(route), null);
   } finally {
     globalThis.fetch = originalFetch;
     clearRouteGeometryCache();

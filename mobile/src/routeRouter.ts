@@ -9,7 +9,7 @@ import type { Coordinate, RoutePlan } from './domain';
 const ROUTER_BASE_URL = process.env.EXPO_PUBLIC_ROUTER_URL ?? 'https://routing.openstreetmap.de/routed-bike/route/v1/driving';
 const BAHRAIN_BOUNDS = { minLatitude: 25.5, maxLatitude: 26.5, minLongitude: 50.3, maxLongitude: 50.9 };
 const MAX_WAYPOINTS = ROUTE_MATCHING_MAX_WAYPOINTS;
-const MAX_GEOMETRY_POINTS = 700;
+const MAX_GEOMETRY_POINTS = 7_000;
 const MAX_ROUTED_DISTANCE_KM = 160;
 const MAX_ENDPOINT_OFFSET_KM = 2;
 const MAX_DISTANCE_METADATA_ERROR_RATIO = 0.01;
@@ -122,7 +122,7 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
     // the final waypoint exactly aligned with it after any rounding.
     points[points.length - 1] = { ...points[points.length - 1], distanceKm: routedDistanceKm };
     return { ok: true, route: {
-        ...route,
+        ...withoutFinalMetrics(route),
         points,
         geometry,
         geometryDistancesKm,
@@ -168,6 +168,7 @@ function parseSnappedWaypoints(value: unknown, requested: Coordinate[]) {
     if (!coordinate || coordinateDistanceKm(coordinate, requested[index]) > MAX_ENDPOINT_OFFSET_KM) return null;
     const distance = finiteNumber(waypoint.distance);
     if (distance === null || distance < 0 || distance / 1_000 > MAX_ENDPOINT_OFFSET_KM) return null;
+    if (!distanceEvidenceMatches(coordinateDistanceKm(coordinate, requested[index]), distance / 1_000)) return null;
     return coordinate;
   });
   return coordinates.every((point): point is Coordinate => point !== null)
@@ -193,12 +194,12 @@ function snappedWaypointsFollowGeometry(geometry: Coordinate[], waypoints: Coord
   let previousAlongKm = Number.NEGATIVE_INFINITY;
   for (let index = 0; index < waypoints.length; index += 1) {
     const candidates = geometryPositions(waypoints[index], geometry, cumulativeKm)
-      .filter((candidate) => candidate.offsetKm <= MAX_WAYPOINT_GEOMETRY_OFFSET_KM && candidate.alongKm + distanceEvidenceToleranceKm(candidate.alongKm, expectedKm[index]) >= previousAlongKm);
+      .filter((candidate) => candidate.offsetKm <= MAX_WAYPOINT_GEOMETRY_OFFSET_KM && candidate.alongKm > previousAlongKm);
     if (!candidates.length) return false;
     const selected = index === waypoints.length - 1
       ? candidates.reduce((latest, candidate) => candidate.alongKm > latest.alongKm ? candidate : latest)
       : candidates.reduce((earliest, candidate) => candidate.alongKm < earliest.alongKm ? candidate : earliest);
-    if (!distanceEvidenceMatches(selected.alongKm, expectedKm[index])) return false;
+    if (selected.alongKm <= previousAlongKm || !distanceEvidenceMatches(selected.alongKm, expectedKm[index])) return false;
     previousAlongKm = selected.alongKm;
   }
   return true;
@@ -378,7 +379,7 @@ export function clearRouteGeometryCache() { geometryCache.clear(); geometryInFli
 // so a cached candidate can never appear under another route's identity.
 function rebaseCachedGeometry(cached: RoutePlan, route: RoutePlan): RoutePlan {
   return {
-    ...route,
+    ...withoutFinalMetrics(route),
     points: route.points.map((point, index) => {
       const snapped = cached.points[index];
       return snapped ? { ...point, latitude: snapped.latitude, longitude: snapped.longitude, distanceKm: snapped.distanceKm, headingDegrees: snapped.headingDegrees } : point;
@@ -393,6 +394,20 @@ function rebaseCachedGeometry(cached: RoutePlan, route: RoutePlan): RoutePlan {
     ...(cached.routedDistanceKm !== undefined ? { routedDistanceKm: cached.routedDistanceKm } : {}),
     ...(route.provisionalDistanceKm !== undefined ? { provisionalDistanceKm: route.provisionalDistanceKm } : {}),
     distanceKm: cached.distanceKm,
+  };
+}
+
+function withoutFinalMetrics(route: RoutePlan): RoutePlan {
+  return {
+    ...route,
+    departureAt: undefined,
+    arrivalAt: undefined,
+    departureLabel: '',
+    arrivalLabel: '',
+    durationMinutes: 0,
+    recommendation: '',
+    segments: [],
+    windSummary: { tailwindPercent: 0, headwindPercent: 0, crosswindPercent: 0 },
   };
 }
 

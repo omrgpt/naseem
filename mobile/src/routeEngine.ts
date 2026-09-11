@@ -72,16 +72,19 @@ function canAnalyseRoute(route: RoutePlan) {
 }
 
 function withoutFinalMetrics(seed: RoutePlan, segments: RoutePlan['segments'] = []): RoutePlan {
+  const downgradeInvalidReady = seed.geometryStatus === 'ready'
+    && (seed.geometryKind === 'road_matched' || seed.geometryKind === undefined || seed.geometryKind === 'none')
+    && !routePlanHasAuthoritativeGeometry(seed);
   const provisionalDistanceKm = Number.isFinite(seed.provisionalDistanceKm) && (seed.provisionalDistanceKm ?? 0) >= 0
     ? seed.provisionalDistanceKm!
-    : Number.isFinite(seed.distanceKm) && seed.distanceKm >= 0
+    : downgradeInvalidReady
+      ? pointDistanceKm(seed.points)
+      : Number.isFinite(seed.distanceKm) && seed.distanceKm >= 0
       ? seed.distanceKm
       : seed.points.at(-1)?.distanceKm ?? 0;
-  const downgradeInvalidRoad = seed.geometryKind === 'road_matched'
-    || (seed.geometryStatus === 'ready' && seed.geometryKind !== 'recorded_trace' && seed.geometryKind !== 'waypoint_trace');
   return {
     ...seed,
-    ...(downgradeInvalidRoad ? {
+    ...(downgradeInvalidReady ? {
       geometryKind: 'waypoint_trace' as const,
       geometryStatus: 'unavailable' as const,
       geometry: undefined,
@@ -113,4 +116,20 @@ function previewSegments(segments: RoutePlan['segments']): RoutePlan['segments']
     wind: { kind: 'crosswind', magnitudeKph: 0, headwindKph: 0, crosswindKph: 0 },
     insight: '',
   }));
+}
+
+function pointDistanceKm(points: RoutePlan['points']) {
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) total += coordinateDistanceKm(points[index - 1], points[index]);
+  return Number.isFinite(total) ? total : 0;
+}
+
+function coordinateDistanceKm(first: RoutePlan['points'][number], second: RoutePlan['points'][number]) {
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const dLat = radians(second.latitude - first.latitude);
+  const dLon = radians(second.longitude - first.longitude);
+  const lat1 = radians(first.latitude);
+  const lat2 = radians(second.latitude);
+  const value = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
 }

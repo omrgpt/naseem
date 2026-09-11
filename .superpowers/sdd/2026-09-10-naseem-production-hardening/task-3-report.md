@@ -104,3 +104,70 @@ route test files.
   rejects those collisions, but `mobile/App.tsx` is out of scope here.
 - Native OS permission, GPS watcher, and native map behavior remain device
   checks for the release gate.
+
+## Fix round — Galileo route-only review
+
+This round stayed within the Task 3 route-domain files and the four allowed
+route test files. No App, screen adapter, map, profile, Route Detail,
+onboarding, translation, accessibility, or live-ride files were changed.
+
+### Review findings addressed
+
+- Canonical readiness now treats a present `routedDistanceKm` as evidence,
+  rejects a stale conflicting legacy `distanceKm`, and reconciles the scalar
+  consumed by progress/matching with the routed total. Runtime-null routed
+  evidence is rejected, and route revisions must be positive integers.
+- Readiness and provider validation project every route/snapped waypoint onto
+  the returned `LineString`, require strict ordered advancement for positive
+  legs, reconcile each geometry index and cumulative total, and retain the
+  existing final-waypoint loop behavior. Snapped metadata distance is checked
+  against request-to-snap distance using the documented evidence tolerance.
+- Rematching clears ETA, wind, recommendation, segment, and label metrics,
+  including cache-hit rebases. Invalid ready-road downgrades preserve neither
+  road-ready metadata nor stale analysis; matching/draft road states are left
+  intact. The geometry cap is now the documented 7,000 points, configurable
+  provider labels remain dynamic, and the cache fingerprint uses request
+  precision.
+- Repository ingress and upsert enforce known NBH family/variant/revision and
+  corridor linkage, reject catalog identity in personal namespaces, and reject
+  non-positive revisions. Repository catalog copies now match lifecycle saves
+  (`drawn` origin, personal ownership, fresh ID, cleared catalog identity and
+  provenance source ID). Reverse drafts clear inherited corridor/routed
+  evidence and retain only recomputed provisional distance.
+
+### Fix-round TDD evidence
+
+- The first fix-round focused RED run covered 54 tests: 46 passed and 8 failed
+  on the review regressions.
+- A later targeted RED run covered 29 tests: 27 passed and 2 failed for null
+  routed evidence and stale provisional fallback; both then passed.
+- The final added RED run covered 58 tests: 55 passed and 3 failed for canonical
+  matcher scalar use, the 7,000-point cap, and rematch metric invalidation.
+  The ingress RED cycle covered 21 tests: 20 passed and 1 failed for missing
+  personal namespace/revision enforcement.
+
+### Fix-round verification
+
+- Focused route suites — PASS, 58/58:
+  `routeRouter.test.ts`, `routeMatcher.test.ts`, `routeLifecycle.test.ts`, and
+  `routeEngine.test.ts`.
+- Full mobile tests — 225/226 passed. The only failure is the out-of-scope
+  `mobile/src/activityRepository.test.ts` completion-draft expectation that
+  an invalid ready-road record with absent geometry still supplies a forecast
+  analysis snapshot. Keeping that stale analysis would violate the requested
+  invalid-ready downgrade safety rule, so this remains a Task 4/integration
+  contract update rather than a Task 3 weakening.
+- `npm.cmd run typecheck` — PASS.
+- `git diff --check` — PASS for the current working tree and scoped route diff
+  (only line-ending normalization warnings were emitted by Git).
+
+### Remaining concerns
+
+- Task 9 still owns readiness inference in
+  `mobile/src/screenTypes.ts` and `mobile/src/screens/screenTypes.ts`; those
+  adapters were intentionally not edited and remain a release integration
+  gate. Task 9 should also keep App selection keyed by canonical identity,
+  not only route ID, when catalog and personal copies coexist.
+- The activity completion-draft test noted above needs to consume the explicit
+  unavailable/no-analysis route state. Native OS permission, GPS watcher, and
+  native map behavior remain device checks for the release gate.
