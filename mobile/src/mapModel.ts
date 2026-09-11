@@ -13,6 +13,7 @@ export type MapGeometryStatus = 'matched' | 'loading' | 'pilot';
 
 export type MapLineModel = {
   linePoints: Coordinate[];
+  lineStyle: 'solid' | 'dashed' | 'none';
   roadMatched: boolean;
   status: MapGeometryStatus;
 };
@@ -24,15 +25,32 @@ type RouteWithGeometryMetadata = RoutePlan & {
 
 /** Dense geometry is the only road-following line the map is allowed to draw. */
 export function mapLinePoints(route: RoutePlan): Coordinate[] {
-  return route.geometry?.length ? route.geometry : route.points;
+  const metadata = route as RouteWithGeometryMetadata;
+  const geometry = route.geometry;
+  if (
+    metadata.geometryKind === 'none' ||
+    metadata.geometryStatus === 'unavailable' ||
+    (!isRenderableGeometry(geometry) && !isPointOnlyPreview(route, metadata))
+  ) {
+    return [];
+  }
+  if (isRenderableGeometry(geometry)) return geometry;
+  const pointPreview = route.points.map(({ latitude, longitude }) => ({
+    latitude,
+    longitude,
+  }));
+  return isRenderableGeometry(pointPreview) ? pointPreview : [];
 }
 
 export function mapLineModel(route: RoutePlan, requestedStatus?: MapGeometryStatus): MapLineModel {
   const roadMatched = hasRoadMatchedGeometry(route);
+  const linePoints = mapLinePoints(route);
   return {
-    linePoints: mapLinePoints(route),
+    linePoints,
+    lineStyle:
+      linePoints.length < 2 ? 'none' : roadMatched ? 'solid' : 'dashed',
     roadMatched,
-    status: mapGeometryStatus(route, requestedStatus),
+    status: renderMapGeometryStatus(route, requestedStatus),
   };
 }
 
@@ -42,13 +60,33 @@ export function mapLineModel(route: RoutePlan, requestedStatus?: MapGeometryStat
  * make a waypoint trace look like road-following geometry.
  */
 export function mapGeometryStatus(route: RoutePlan, requestedStatus?: MapGeometryStatus): MapGeometryStatus {
-  // A supplied or recorded trace is drawable, but it is not road-following
-  // geometry. Canonical review views carry this metadata explicitly; the
-  // family fallback keeps older catalog plans honest as previews too.
-  if (!hasRoadMatchedGeometry(route)) return requestedStatus === 'loading' ? 'loading' : 'pilot';
-  if (requestedStatus === 'pilot' && route.familyId === 'nbh-loop') return 'pilot';
-  if (route.geometry?.length) return 'matched';
-  return requestedStatus === 'loading' ? 'loading' : 'pilot';
+  const metadata = route as RouteWithGeometryMetadata;
+  const status = renderMapGeometryStatus(route, requestedStatus);
+  // Legacy callers used `pilot` as a request to display any supplied geometry.
+  // Keep that compatibility at this helper boundary; mapLineModel uses the
+  // strict renderer status above so legacy coordinates can never look solid.
+  if (
+    status === 'pilot' &&
+    requestedStatus === 'pilot' &&
+    metadata.geometryKind === undefined &&
+    metadata.geometryStatus === undefined &&
+    isRenderableGeometry(route.geometry)
+  ) {
+    return 'matched';
+  }
+  return status;
+}
+
+function renderMapGeometryStatus(
+  route: RoutePlan,
+  requestedStatus?: MapGeometryStatus,
+): MapGeometryStatus {
+  const metadata = route as RouteWithGeometryMetadata;
+  if (hasRoadMatchedGeometry(route)) return 'matched';
+  if (metadata.geometryStatus === 'matching') return 'loading';
+  return requestedStatus === 'loading' && metadata.geometryStatus === undefined
+    ? 'loading'
+    : 'pilot';
 }
 
 export function mapIsLoop(route: RoutePlan) {
@@ -122,9 +160,38 @@ export function mapMarkerPoints(
 
 function hasRoadMatchedGeometry(route: RoutePlan) {
   const metadata = route as RouteWithGeometryMetadata;
-  return Boolean(route.geometry?.length) &&
-    (metadata.geometryKind === undefined || metadata.geometryKind === 'road_matched') &&
-    (metadata.geometryStatus === undefined || metadata.geometryStatus === 'ready');
+  return (
+    metadata.geometryKind === 'road_matched' &&
+    metadata.geometryStatus === 'ready' &&
+    isRenderableGeometry(route.geometry)
+  );
+}
+
+function isPointOnlyPreview(
+  route: RoutePlan,
+  metadata: RouteWithGeometryMetadata,
+) {
+  if (route.geometry?.length) return false;
+  if (metadata.geometryKind === 'road_matched' || metadata.geometryKind === 'none') return false;
+  if (metadata.geometryKind === 'recorded_trace' || metadata.geometryKind === 'waypoint_trace') return true;
+  const source = route.source.toLowerCase();
+  return source.includes('gpx') || source.includes('draw');
+}
+
+function isRenderableGeometry(geometry: Coordinate[] | undefined): geometry is Coordinate[] {
+  return Boolean(
+    Array.isArray(geometry) &&
+      geometry.length >= 2 &&
+      geometry.every(
+        (point) =>
+          Number.isFinite(point.latitude) &&
+          Number.isFinite(point.longitude) &&
+          point.latitude >= -90 &&
+          point.latitude <= 90 &&
+          point.longitude >= -180 &&
+          point.longitude <= 180,
+      ),
+  );
 }
 
 function sampleIndexes(length: number, maximum: number) {

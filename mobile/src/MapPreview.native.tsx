@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polyline, type Region } from "react-native-maps";
 import type { Coordinate, RoadKind } from "./domain";
 import type { MapPreviewProps, MapText } from "./MapPreview";
 import {
+  MAP_BOTTOM_SAFE_ZONE,
+  MAP_CONTROL_CLEARANCE,
   hasFiniteCoordinate,
   shouldShowMinimalMapControls,
   shouldShowUserLocationControl,
@@ -50,6 +52,8 @@ export function MapPreview({
   userCoordinate,
   onReset,
   onMapPress,
+  activeEndpoint,
+  onSelectPoint,
   roadLabels,
   mapText,
 }: Props) {
@@ -59,7 +63,7 @@ export function MapPreview({
     userCoordinate,
   );
   const lineModel = mapLineModel(route, mapText?.status);
-  const { linePoints, roadMatched } = lineModel;
+  const { linePoints, lineStyle, roadMatched } = lineModel;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
   const focusSegment = normalizeSelectedSegment(selectedSegment);
   const roadLabelFor = (kind: RoadKind) =>
@@ -120,8 +124,8 @@ export function MapPreview({
   };
   const text: MapText = {
     native: rtl
-      ? "خريطة Apple / Google · تظهر أدلة المسار حسب المقطع"
-      : "Apple / Google map · route evidence shown by segment",
+      ? "خريطة الجهاز · تظهر أدلة المسار حسب المقطع"
+      : "Device map · route evidence shown by segment",
     web: rtl
       ? "معاينة OpenStreetMap على الويب"
       : "Supplied route preview; road verification pending",
@@ -153,6 +157,11 @@ export function MapPreview({
     startEndPoint: rtl ? "البداية والنهاية" : "Start and finish",
     destinationPoint: rtl ? "الوجهة" : "Destination",
     waypoint: rtl ? "نقطة طريق" : "Waypoint",
+    activeEndpointLabel: activeEndpoint
+      ? rtl
+        ? `اختر ${activeEndpoint === "start" ? "البداية" : "الوجهة"} على الخريطة`
+        : `Choose ${activeEndpoint === "start" ? "Start" : "Destination"} on the map`
+      : undefined,
     userLocation: rtl ? "موقعك الحالي" : "Current location",
     ...mapText,
   };
@@ -165,8 +174,6 @@ export function MapPreview({
       : mapStatus === "loading"
         ? text.statusLoading
         : text.statusPilot;
-  const nativeMapNeedsKey =
-    Platform.OS === "android" && !process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const mapLabel =
     text.mapLabel ??
     (rtl ? `خريطة المسار: ${route.name}` : `${route.name} native map`);
@@ -206,7 +213,7 @@ export function MapPreview({
   };
   const pointLabels = markerEntries.map(pointLabel);
   const accessiblePointLabels = pointLabels;
-  const mapSummary = `${mapLabel}. ${statusLabel}.${compact ? "" : ` ${nativeMapNeedsKey ? (text.nativeNeedsKey ?? text.native) : text.native}. ${routePointsLabel}: ${accessiblePointLabels.length ? accessiblePointLabels.join(". ") : rtl ? "لا توجد نقاط مسار." : "No route points."}`}`;
+  const mapSummary = `${mapLabel}. ${statusLabel}.${activeEndpoint ? ` ${text.activeEndpointLabel}.` : ""}${compact ? "" : ` ${text.native}. ${routePointsLabel}: ${accessiblePointLabels.length ? accessiblePointLabels.join(". ") : rtl ? "لا توجد نقاط مسار." : "No route points."}`}`;
   const mapDetailsId = `map-details-${route.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   return (
     <View
@@ -262,7 +269,7 @@ export function MapPreview({
               strokeWidth={focusSegment === segmentIndex ? 8 : 5}
               lineCap="round"
               lineJoin="round"
-              lineDashPattern={roadMatched ? undefined : [8, 8]}
+              lineDashPattern={lineStyle === "dashed" ? [8, 8] : undefined}
               zIndex={focusSegment === segmentIndex ? 2 : 1}
             />
           );
@@ -289,8 +296,10 @@ export function MapPreview({
             <Marker
               key={`${route.id}-marker-${entry.sourceIndex}`}
               coordinate={entry.coordinate}
-              accessibilityRole="image"
+              onPress={onSelectPoint ? () => onSelectPoint(entry.routePoint) : undefined}
+              accessibilityRole={onSelectPoint ? "button" : "image"}
               accessibilityLabel={pointLabels[index]}
+              accessibilityHint={onSelectPoint ? text.activeEndpointLabel : undefined}
               title={
                 entry.isLoop && entry.isStart
                   ? `${rtl ? (entry.routePoint.nameAr ?? entry.routePoint.name) : entry.routePoint.name} · ${text.loop}`
@@ -387,18 +396,23 @@ export function MapPreview({
           </View>
         </View>
       )}
-      {nativeMapNeedsKey && (
+      {activeEndpoint && (
         <View
-          style={styles.providerNotice}
+          testID="map-active-endpoint"
           pointerEvents="none"
           accessible
-          accessibilityRole="alert"
+          accessibilityRole="text"
+          accessibilityLabel={text.activeEndpointLabel}
           accessibilityLiveRegion="polite"
           aria-live="polite"
+          style={styles.activeEndpointOverlay}
         >
-          <Text style={[styles.providerNoticeText, rtl && styles.arabicMeta]}>
-            {text.providerUnavailable}
-          </Text>
+          <View style={styles.activeEndpointCrosshair} />
+          <View style={styles.activeEndpointBadge}>
+            <Text style={[styles.activeEndpointText, rtl && styles.arabicControl]}>
+              {text.activeEndpointLabel}
+            </Text>
+          </View>
         </View>
       )}
       {showUserLocationControl && (
@@ -478,9 +492,7 @@ export function MapPreview({
               rtl && styles.arabicMeta,
             ]}
           >
-            {nativeMapNeedsKey
-              ? (text.nativeNeedsKey ?? text.native)
-              : text.native}
+            {text.native}
           </Text>
         </View>
       )}
@@ -592,6 +604,38 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "#FFFFFF",
   },
+  activeEndpointOverlay: {
+    position: "absolute",
+    top: "50%",
+    left: 12,
+    right: 12,
+    alignItems: "center",
+    transform: [{ translateY: -20 }],
+    zIndex: 4,
+  },
+  activeEndpointCrosshair: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2,
+    borderColor: "#A94B31",
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  activeEndpointBadge: {
+    marginTop: 6,
+    maxWidth: "100%",
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    backgroundColor: "rgba(16,42,46,0.94)",
+  },
+  activeEndpointText: {
+    color: "#FFFFFF",
+    fontFamily: FONT_SEMIBOLD,
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+  },
   currentLocationButton: {
     position: "absolute",
     top: 64,
@@ -632,7 +676,7 @@ const styles = StyleSheet.create({
   minimalControls: {
     position: "absolute",
     insetInlineEnd: 14,
-    bottom: 18,
+    bottom: MAP_BOTTOM_SAFE_ZONE + MAP_CONTROL_CLEARANCE,
     gap: 8,
     alignItems: "flex-end",
     zIndex: 4,

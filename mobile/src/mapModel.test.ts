@@ -35,12 +35,82 @@ test('dense route geometry is the map line instead of review points', () => {
     { latitude: 26.105, longitude: 50.51 },
     { latitude: 26.11, longitude: 50.5 },
   ];
-  const route = { ...baseRoute, geometry };
+  const route = {
+    ...baseRoute,
+    geometry,
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'ready' as const,
+  };
 
   assert.deepEqual(mapLinePoints(route), geometry);
   assert.notDeepEqual(mapLinePoints(route), route.points);
   assert.equal(mapLineModel(route).roadMatched, true);
   assert.equal(mapLineModel(route).status, 'matched');
+});
+
+test('metadata-less geometry stays a dashed preview instead of becoming road truth', () => {
+  const route = {
+    ...baseRoute,
+    geometry: [
+      { latitude: 26.1, longitude: 50.5 },
+      { latitude: 26.105, longitude: 50.51 },
+    ],
+  };
+  const model = mapLineModel(route, 'matched');
+
+  assert.equal(model.roadMatched, false);
+  assert.equal((model as { lineStyle?: string }).lineStyle, 'dashed');
+  assert.equal(model.status, 'pilot');
+});
+
+test('unavailable geometry renders named points without any route line', () => {
+  const route = {
+    ...baseRoute,
+    geometry: [
+      { latitude: 26.1, longitude: 50.5 },
+      { latitude: 26.105, longitude: 50.51 },
+    ],
+    geometryKind: 'waypoint_trace' as const,
+    geometryStatus: 'unavailable' as const,
+  };
+  const model = mapLineModel(route);
+
+  assert.deepEqual(model.linePoints, []);
+  assert.equal((model as { lineStyle?: string }).lineStyle, 'none');
+  assert.equal(model.roadMatched, false);
+  assert.deepEqual(
+    mapMarkerPoints(route, model.linePoints, model.roadMatched).map(
+      (marker) => marker.routePoint.name,
+    ),
+    ['Start', 'Turn'],
+  );
+});
+
+test('empty or missing geometry does not fall back to a straight route line', () => {
+  assert.deepEqual(mapLinePoints({ ...baseRoute, geometry: [] }), []);
+  assert.deepEqual(mapLinePoints(baseRoute), []);
+  assert.equal(
+    (mapLineModel({ ...baseRoute, geometry: [] }) as { lineStyle?: string })
+      .lineStyle,
+    'none',
+  );
+});
+
+test('non-finite geometry coordinates cannot become a rendered line', () => {
+  const route = {
+    ...baseRoute,
+    geometry: [
+      { latitude: Number.NaN, longitude: 50.5 },
+      { latitude: 26.105, longitude: Number.POSITIVE_INFINITY },
+    ],
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'ready' as const,
+  };
+  const model = mapLineModel(route);
+
+  assert.deepEqual(model.linePoints, []);
+  assert.equal((model as { lineStyle?: string }).lineStyle, 'none');
+  assert.equal(model.roadMatched, false);
 });
 
 test('a stale matched request stays a preview when dense geometry is absent', () => {
@@ -60,8 +130,25 @@ test('recorded geometry stays a dashed preview even when it has coordinates', ()
   };
 
   assert.equal(mapLineModel(route, 'matched').roadMatched, false);
+  assert.equal(mapLineModel(route, 'matched').lineStyle, 'dashed');
   assert.equal(mapLineModel(route, 'matched').status, 'pilot');
   assert.deepEqual(mapMarkerPoints(route)[0]?.coordinate, route.points[0]);
+});
+
+test('point-only drawn previews stay dashed without becoming road geometry', () => {
+  const route = {
+    ...baseRoute,
+    source: 'Drawn on device',
+    geometry: undefined,
+  };
+  const model = mapLineModel(route);
+
+  assert.deepEqual(
+    model.linePoints,
+    baseRoute.points.map(({ latitude, longitude }) => ({ latitude, longitude })),
+  );
+  assert.equal(model.lineStyle, 'dashed');
+  assert.equal(model.roadMatched, false);
 });
 
 test('non-ready road geometry cannot render as a solid route', () => {
@@ -76,7 +163,8 @@ test('non-ready road geometry cannot render as a solid route', () => {
   };
 
   assert.equal(mapLineModel(route, 'matched').roadMatched, false);
-  assert.equal(mapLineModel(route, 'matched').status, 'pilot');
+  assert.equal(mapLineModel(route, 'matched').lineStyle, 'dashed');
+  assert.equal(mapLineModel(route, 'matched').status, 'loading');
 });
 
 test('loop markers represent the shared start and finish once', () => {

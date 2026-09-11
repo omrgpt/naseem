@@ -22,6 +22,7 @@ import type { Coordinate, RoadKind, RoutePlan } from "./domain";
 import type { MapPreviewProps } from "./MapPreview";
 import {
   hasFiniteCoordinate,
+  mapControlLayout,
   shouldShowMinimalMapControls,
   shouldShowUserLocationControl,
 } from "./mapPreviewContract";
@@ -63,6 +64,8 @@ export function MapPreview({
   showUserLocation = false,
   onReset,
   onMapPress,
+  activeEndpoint,
+  onSelectPoint,
   userCoordinate,
   roadLabels,
   mapText,
@@ -70,7 +73,12 @@ export function MapPreview({
   const { width: viewportWidth } = useWindowDimensions();
   const width = Math.max(260, Math.min(728, viewportWidth - 32));
   const height = fullScreen ? 448 : compact ? 248 : 352;
-  const { linePoints, roadMatched, status: mapStatus } = mapLineModel(
+  const minimalControlLayout = mapControlLayout(
+    { width, height },
+    height,
+    146,
+  );
+  const { linePoints, lineStyle, roadMatched, status: mapStatus } = mapLineModel(
     route,
     mapText?.status,
   );
@@ -141,8 +149,8 @@ export function MapPreview({
     }
   const text = {
     native: rtl
-      ? "خريطة Apple / Google · تظهر أدلة المسار حسب المقطع"
-      : "Apple / Google map · route evidence shown by segment",
+      ? "خريطة OpenStreetMap · تظهر أدلة المسار حسب المقطع"
+      : "OpenStreetMap map · route evidence shown by segment",
     web: rtl
       ? "معاينة OpenStreetMap على الويب"
       : "Supplied route preview; road verification pending",
@@ -178,6 +186,11 @@ export function MapPreview({
     startEndPoint: rtl ? "البداية والنهاية" : "Start and finish",
     destinationPoint: rtl ? "الوجهة" : "Destination",
     waypoint: rtl ? "نقطة طريق" : "Waypoint",
+    activeEndpointLabel: activeEndpoint
+      ? rtl
+        ? `اختر ${activeEndpoint === "start" ? "البداية" : "الوجهة"} على الخريطة`
+        : `Choose ${activeEndpoint === "start" ? "Start" : "Destination"} on the map`
+      : undefined,
     userLocation: rtl ? "موقعك الحالي" : "Current location",
     ...mapText,
   };
@@ -491,7 +504,10 @@ export function MapPreview({
             />
           ))}
         </View>
-        <View style={styles.routeOverlay} pointerEvents="none">
+        <View
+          style={styles.routeOverlay}
+          pointerEvents={onSelectPoint ? "box-none" : "none"}
+        >
           {linePaths.length > 0 && (
             <Svg
               width={width}
@@ -511,7 +527,7 @@ export function MapPreview({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   opacity={0.84}
-                  strokeDasharray={roadMatched ? undefined : [8, 8]}
+                  strokeDasharray={lineStyle === "dashed" ? [8, 8] : undefined}
                 />
               ))}
               {linePaths.map((path, index) => (
@@ -536,7 +552,7 @@ export function MapPreview({
                       ? 1
                       : 0.34
                   }
-                  strokeDasharray={roadMatched ? undefined : [8, 8]}
+                  strokeDasharray={lineStyle === "dashed" ? [8, 8] : undefined}
                 />
               ))}
             </Svg>
@@ -560,11 +576,20 @@ export function MapPreview({
                       : "E"
                     : markerIndex;
             return (
-              <View
+              <Pressable
                 key={`${route.id}-marker-${entry.sourceIndex}`}
                 accessible
-                accessibilityRole="image"
+                accessibilityRole={onSelectPoint ? "button" : "image"}
                 accessibilityLabel={pointLabels[index]}
+                accessibilityHint={onSelectPoint ? text.activeEndpointLabel : undefined}
+                onPress={
+                  onSelectPoint
+                    ? (event: any) => {
+                        event?.stopPropagation?.();
+                        onSelectPoint(entry.routePoint);
+                      }
+                    : undefined
+                }
                 style={[
                   styles.webMarker,
                   { left: entry.position.x - 10, top: entry.position.y - 10 },
@@ -577,7 +602,7 @@ export function MapPreview({
                 ]}
               >
                 <Text style={styles.markerText}>{markerText}</Text>
-              </View>
+              </Pressable>
             );
           })}
           {userPosition && (
@@ -593,6 +618,24 @@ export function MapPreview({
           )}
         </View>
       </View>
+      {activeEndpoint && (
+        <View
+          testID="map-active-endpoint"
+          pointerEvents="none"
+          accessible
+          accessibilityRole="text"
+          accessibilityLabel={text.activeEndpointLabel}
+          aria-live="polite"
+          style={styles.activeEndpointOverlay}
+        >
+          <View style={styles.activeEndpointCrosshair} />
+          <View style={styles.activeEndpointBadge}>
+            <Text style={[styles.activeEndpointText, rtl && styles.arabicControl]}>
+              {text.activeEndpointLabel}
+            </Text>
+          </View>
+        </View>
+      )}
       {showUserLocationControl && (
         <Pressable
           testID="map-center-user-location"
@@ -791,9 +834,13 @@ export function MapPreview({
           </Text>
         </Pressable>
       )}
-      {showMinimalControls && (
+      {showMinimalControls && minimalControlLayout.visible && (
         <View
-          style={[styles.minimalControls, rtl && styles.minimalControlsRtl]}
+          style={[
+            styles.minimalControls,
+            { bottom: minimalControlLayout.bottom },
+            rtl && styles.minimalControlsRtl,
+          ]}
           accessibilityRole="toolbar"
           accessibilityLabel={rtl ? "أدوات الخريطة" : "Map controls"}
         >
@@ -998,6 +1045,38 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "#FFFFFF",
   },
+  activeEndpointOverlay: {
+    position: "absolute",
+    top: "50%",
+    left: 12,
+    right: 12,
+    alignItems: "center",
+    transform: [{ translateY: -20 }],
+    zIndex: 4,
+  },
+  activeEndpointCrosshair: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2,
+    borderColor: "#A94B31",
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  activeEndpointBadge: {
+    marginTop: 6,
+    maxWidth: "100%",
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    backgroundColor: "rgba(16,42,46,0.94)",
+  },
+  activeEndpointText: {
+    color: "#FFFFFF",
+    fontFamily: FONT_SEMIBOLD,
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
+  },
   userMarker: {
     position: "absolute",
     height: 16,
@@ -1128,7 +1207,7 @@ const styles = StyleSheet.create({
   minimalControls: {
     position: "absolute",
     insetInlineEnd: 12,
-    bottom: 20,
+    bottom: 96,
     gap: 8,
     alignItems: "flex-end",
     zIndex: 4,

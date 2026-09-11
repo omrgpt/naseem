@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import * as mapPreviewContract from "./mapPreviewContract";
 import {
   shouldShowMinimalMapControls,
   shouldShowUserLocationControl,
@@ -47,4 +48,48 @@ test("current-location control requires opt-in and a finite coordinate", () => {
     false,
   );
   assert.equal(shouldShowUserLocationControl(true), false);
+});
+
+test("map controls stay above the bottom safe zone on phone and desktop surfaces", () => {
+  const mapControlLayout = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      mapControlLayout?: (viewport: { width: number; height: number }, mapHeight: number, controlHeight: number) => {
+        top: number;
+        bottom: number;
+        visible: boolean;
+      };
+    }
+  ).mapControlLayout;
+  assert.equal(typeof mapControlLayout, "function");
+  if (!mapControlLayout) return;
+
+  for (const viewport of [
+    { width: 390, height: 844 },
+    { width: 1280, height: 720 },
+  ]) {
+    const layout = mapControlLayout(viewport, 448, 146);
+    assert.equal(layout.visible, true);
+    assert.ok(layout.top >= 0);
+    assert.ok(layout.bottom >= 88);
+  }
+});
+
+test("native provider falls back without a configured Google key", () => {
+  const selectMapProvider = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      selectMapProvider?: (input: {
+        platform: "web" | "ios" | "android";
+        googleMapsApiKey?: string;
+      }) => string;
+    }
+  ).selectMapProvider;
+  assert.equal(typeof selectMapProvider, "function");
+  if (!selectMapProvider) return;
+
+  assert.equal(
+    selectMapProvider({ platform: "android", googleMapsApiKey: "" }),
+    "react-native-maps",
+  );
+  assert.equal(selectMapProvider({ platform: "ios" }), "react-native-maps");
+  assert.equal(selectMapProvider({ platform: "web" }), "openstreetmap");
 });

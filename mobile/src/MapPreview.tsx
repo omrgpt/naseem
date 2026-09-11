@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 import { MapPreview as NativeMapPreview } from "./MapPreview.native";
 import { MapPreview as WebMapPreview } from "./MapPreview.web";
-import type { Coordinate, RoadKind, RoutePlan } from "./domain";
+import type { Coordinate, RoadKind, RoutePlan, RoutePoint } from "./domain";
 
 export type MapText = {
   native: string;
@@ -27,6 +27,7 @@ export type MapText = {
   startEndPoint?: string;
   destinationPoint?: string;
   waypoint?: string;
+  activeEndpointLabel?: string;
   addPoint?: string;
   addPointHint?: string;
   userLocation?: string;
@@ -49,8 +50,12 @@ export type MapPreviewProps = {
   showUserLocation?: boolean;
   /** Renderers use this supplied value only; they never request location here. */
   userCoordinate?: Coordinate;
+  /** The endpoint currently owned by map placement, when a picker supplies it. */
+  activeEndpoint?: "start" | "destination";
   onReset?: () => void;
   onMapPress?: (coordinate: Coordinate) => void;
+  /** Optional marker selection; the renderer never mutates route state. */
+  onSelectPoint?: (point: RoutePoint) => void;
   roadLabels?: Partial<Record<RoadKind, string>>;
   mapText?: MapText;
 };
