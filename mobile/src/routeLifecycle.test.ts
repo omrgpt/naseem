@@ -17,7 +17,7 @@ import {
   traceReady,
   validateRouteLifecycle,
 } from './routeLifecycle';
-import { createRouteRepository, routeAnalysisKey, routeRecordFromPlan } from './routeRepository';
+import { createRouteRepository, routeAnalysisKey, routePlanHasAuthoritativeGeometry, routeRecordFromPlan } from './routeRepository';
 import { routePlanFromRecord } from './routeRepository';
 import * as routeLifecycle from './routeLifecycle';
 
@@ -43,7 +43,7 @@ test('route lifecycle makes matching, saving, selection, analysis, snapshot, and
   if (matching.state !== 'matching') throw new Error('Expected matching state');
   assert.deepEqual(matching.route.geometry.coordinates, []);
 
-  const matchedPlan = { ...NBH_LOOP, id: draft.id, name: draft.name, points: draft.points, geometryKind: 'road_matched' as const, geometryStatus: 'ready' as const, distanceStatus: 'authoritative' as const, geometry: [start, { latitude: 26.105, longitude: 50.505 }, finish], geometryDistancesKm: [0, 0.7, 1.4], geometrySource: 'licensed road matcher', distanceKm: 1.4 };
+  const matchedPlan = { ...NBH_LOOP, id: draft.id, familyId: undefined, variantId: undefined, revisionId: undefined, revision: matching.route.revision, name: draft.name, points: draft.points.map((point, index) => ({ ...point, distanceKm: index === 0 ? 0 : 1.4 })), geometryKind: 'road_matched' as const, geometryStatus: 'ready' as const, distanceStatus: 'authoritative' as const, geometry: [start, { latitude: 26.105, longitude: 50.505 }, finish], geometryDistancesKm: [0, 0.7, 1.4], geometrySource: 'licensed road matcher', distanceKm: 1.4 };
   const ready = routeMatchingSucceeded(matching.route, matchedPlan);
   assert.equal(ready.state, 'trace-ready');
   if (ready.state !== 'trace-ready') throw new Error('Expected trace-ready state');
@@ -253,6 +253,10 @@ test('a stale match from before endpoint editing cannot promote the edited route
   const stalePlan = {
     ...NBH_LOOP,
     id: original.id,
+    familyId: undefined,
+    variantId: undefined,
+    revisionId: undefined,
+    revision: matching.route.revision,
     geometryKind: 'road_matched' as const,
     geometryStatus: 'ready' as const,
     distanceStatus: 'authoritative' as const,
@@ -366,6 +370,30 @@ test('route plan does not expose analysis from an older route revision', () => {
   assert.deepEqual(plan.segments, []);
 });
 
+test('canonical readiness reconciles point, leg, geometry, and routed distance evidence', () => {
+  const valid = {
+    ...NBH_LOOP,
+    id: 'distance-evidence-route',
+    points: [
+      { ...NBH_LOOP.points[0], ...start, distanceKm: 0 },
+      { ...NBH_LOOP.points[1], ...finish, distanceKm: 1.4 },
+    ],
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'ready' as const,
+    distanceStatus: 'authoritative' as const,
+    geometry: [start, { latitude: 26.105, longitude: 50.505 }, finish],
+    geometryDistancesKm: [0, 0.7, 1.4],
+    geometrySource: 'licensed road matcher',
+    distanceKm: 1.4,
+  };
+  assert.equal(routePlanHasAuthoritativeGeometry(valid), true);
+
+  assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, geometryDistancesKm: [0, 0.2, 1.4] }), false);
+  assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, points: valid.points.map((point, index) => ({ ...point, distanceKm: index === 0 ? 0 : 2 })) }), false);
+  assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, legDistancesKm: [2] } as typeof valid & { legDistancesKm: number[] }), false);
+  assert.equal(routePlanHasAuthoritativeGeometry({ ...valid, routedDistanceKm: 2 } as typeof valid & { routedDistanceKm: number }), false);
+});
+
 test('incomplete ready road metadata is downgraded to an unavailable waypoint trace', () => {
   const record = routeRecordFromPlan({
     ...NBH_LOOP,
@@ -417,4 +445,101 @@ test('reverse returns a clear unavailable result for a shared-start loop and a n
   assert.equal(distinctResult.route.revision, distinct.revision + 1);
   assert.notDeepEqual(distinctResult.route.points, distinct.points);
   assert.notDeepEqual(distinctResult.route.points[0], distinctResult.route.points.at(-1));
+  assert.equal(distinctResult.route.corridor, undefined);
+  assert.equal(distinctResult.route.analysis, undefined);
+});
+
+test('personal copies do not inherit catalog identity and catalog/personal ID collisions are rejected', () => {
+  const personalCopy = routeRecordFromPlan({ ...NBH_LOOP, id: 'personal-copy', name: 'My copy' }, {
+    origin: 'drawn',
+    ownership: 'personal',
+    geometry: { kind: 'waypoint_trace', status: 'draft' },
+    roadEvidenceStatus: 'unknown',
+    provenance: { source: 'Drawn on device' },
+  });
+  assert.equal(personalCopy.familyId, undefined);
+  assert.equal(personalCopy.variantId, undefined);
+  assert.equal(personalCopy.revisionId, undefined);
+  assert.equal(personalCopy.corridor, undefined);
+
+  const sameIdPersonalCopy = routeRecordFromPlan(NBH_LOOP, {
+    origin: 'drawn',
+    ownership: 'personal',
+    geometry: { kind: 'waypoint_trace', status: 'draft' },
+    roadEvidenceStatus: 'unknown',
+    provenance: { source: 'Drawn on device' },
+  });
+  assert.notEqual(sameIdPersonalCopy.id, NBH_LOOP.id);
+
+  const explicitCatalogIdentityCopy = routeRecordFromPlan({ ...NBH_LOOP, id: 'personal-explicit-catalog-identity' }, {
+    origin: 'drawn',
+    ownership: 'personal',
+    geometry: { kind: 'waypoint_trace', status: 'draft' },
+    roadEvidenceStatus: 'unknown',
+    provenance: { source: 'Drawn on device' },
+    familyId: NBH_LOOP.familyId,
+    variantId: NBH_LOOP.variantId,
+    revisionId: NBH_LOOP.revisionId,
+  });
+  assert.equal(explicitCatalogIdentityCopy.familyId, undefined);
+  assert.equal(explicitCatalogIdentityCopy.variantId, undefined);
+  assert.equal(explicitCatalogIdentityCopy.revisionId, undefined);
+  assert.throws(() => routeRecordFromPlan({ ...NBH_LOOP, corridor: undefined }, {
+    origin: 'pilot',
+    ownership: 'catalog',
+    geometry: { kind: 'recorded_trace', status: 'ready' },
+    roadEvidenceStatus: 'pilot_pending',
+    provenance: { source: 'Catalog' },
+    familyId: NBH_LOOP.familyId,
+    variantId: 'wrong-variant',
+    revisionId: NBH_LOOP.revisionId,
+  }), /family\/variant\/revision/);
+
+  const catalog = routeRecordFromPlan(NBH_LOOP, {
+    origin: 'pilot',
+    ownership: 'catalog',
+    geometry: { kind: 'recorded_trace', status: 'ready' },
+    roadEvidenceStatus: 'pilot_pending',
+    provenance: { source: 'Catalog' },
+  });
+  const collision = { ...catalog, ownership: 'personal' as const, origin: 'drawn' as const };
+  assert.throws(() => createRouteRepository([catalog, collision]), /distinct route identity/);
+  const identityCollision = { ...catalog, id: 'another-route-id' };
+  assert.throws(() => createRouteRepository([catalog, identityCollision]), /distinct route identity/);
+});
+
+test('reversing a catalog route creates a personal draft with a fresh identity', () => {
+  const reverse = (routeLifecycle as unknown as { reverseRoute?: (route: ReturnType<typeof routeRecord>) => any }).reverseRoute;
+  assert.equal(typeof reverse, 'function');
+  if (!reverse) throw new Error('Expected reverse route helper');
+  const catalog = routeRecordFromPlan({
+    ...NBH_LOOP,
+    id: 'catalog-reverse-source',
+    points: [
+      { ...NBH_LOOP.points[0], latitude: 26.1, longitude: 50.5, distanceKm: 0 },
+      { ...NBH_LOOP.points[1], latitude: 26.12, longitude: 50.52, distanceKm: 2.9 },
+    ],
+  }, {
+    origin: 'pilot',
+    ownership: 'catalog',
+    geometry: { kind: 'recorded_trace', status: 'ready' },
+    roadEvidenceStatus: 'pilot_pending',
+    provenance: { source: 'Catalog' },
+    familyId: NBH_LOOP.familyId,
+    variantId: NBH_LOOP.variantId,
+    revisionId: NBH_LOOP.revisionId,
+    revision: 1,
+    corridor: NBH_LOOP.corridor,
+  });
+  const result = reverse(catalog);
+  assert.equal(result.ok, true);
+  if (!result.ok) throw new Error('Expected reversed draft');
+  assert.equal(result.route.ownership, 'personal');
+  assert.notEqual(result.route.id, catalog.id);
+  assert.equal(result.route.familyId, undefined);
+  assert.equal(result.route.variantId, undefined);
+  assert.equal(result.route.corridor, undefined);
+  assert.equal(result.route.geometry.kind, 'waypoint_trace');
+  assert.equal(result.route.geometry.status, 'draft');
+  assert.equal(result.route.provisionalDistanceKm, result.route.points.at(-1)?.distanceKm);
 });

@@ -18,6 +18,11 @@ const MAX_DURATION_METADATA_ERROR_RATIO = 0.05;
 const MAX_DURATION_METADATA_ERROR_S = 30;
 const MAX_GEOMETRY_DISTANCE_ERROR_RATIO = 0.1;
 const MAX_GEOMETRY_DISTANCE_ERROR_M = 2_500;
+/** A provider waypoint may be a small distance from a serialized polyline. */
+const MAX_WAYPOINT_GEOMETRY_OFFSET_KM = 0.25;
+/** Cumulative geometry/leg evidence is reconciled within 150 m or 2%. */
+const DISTANCE_EVIDENCE_ERROR_RATIO = 0.02;
+const DISTANCE_EVIDENCE_ERROR_KM = 0.15;
 const ROUTER_CACHE_TTL_MS = 5 * 60_000;
 const ROUTER_CACHE_MAX_ENTRIES = 64;
 const ROUTER_CALLS_PER_MINUTE = 20;
@@ -96,13 +101,14 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
     const snapped = parseSnappedWaypoints(routerPayload.waypoints, route.points);
     if (!geometry || !legs || totalDistanceM === null || totalDistanceM <= 0 || totalDistanceM / 1_000 > MAX_ROUTED_DISTANCE_KM || totalDurationS === null || totalDurationS <= 0 || !snapped.ok) return { ok: false, reason: 'invalidResponse' };
     if (!endpointsCorrespond(geometry, route.points, snapped.coordinates)) return { ok: false, reason: 'invalidResponse' };
+    if (!snappedWaypointsFollowGeometry(geometry, snapped.coordinates, legs.distances)) return { ok: false, reason: 'invalidResponse' };
 
     const geometryDistancesKm = cumulativeDistances(geometry);
     const geometryDistanceKm = geometryDistancesKm.at(-1) ?? 0;
     const routedDistanceKm = totalDistanceM / 1_000;
     if (!isNondecreasing(geometryDistancesKm) || geometryDistanceKm <= 0 || !geometryDistanceMatches(totalDistanceM, geometryDistanceKm) || !distanceMetadataMatches(totalDistanceM, legs.distances) || !durationMetadataMatches(totalDurationS, legs.durations)) return { ok: false, reason: 'invalidResponse' };
-    geometryDistancesKm[geometryDistancesKm.length - 1] = routedDistanceKm;
-    if (!isNondecreasing(geometryDistancesKm)) return { ok: false, reason: 'invalidResponse' };
+    // Preserve the recomputed geometry index as independent evidence; the
+    // provider total is carried separately as routedDistanceKm.
 
     let cumulativeM = 0;
     const anchoredPoints = snapped.coordinates ? route.points.map((point, index) => ({ ...point, ...snapped.coordinates![index] })) : route.points;
@@ -120,11 +126,13 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
         points,
         geometry,
         geometryDistancesKm,
-        geometrySource: 'OpenStreetMap routed-bike preview · suitability audit pending',
+        geometrySource: `${ROUTER_SOURCE_LABEL} · suitability audit pending`,
         geometryKind: 'road_matched',
         geometryStatus: 'ready',
         distanceStatus: 'authoritative',
         distanceKm: totalDistanceM / 1_000,
+        legDistancesKm: legs.distances.map((distance) => distance / 1_000),
+        routedDistanceKm,
       } };
   } catch {
     return { ok: false, reason: 'routerUnavailable' };
@@ -134,7 +142,7 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
 }
 
 function parseGeometry(value: unknown): Coordinate[] | null {
-  if (!isRecord(value) || (value.type !== undefined && value.type !== 'LineString') || !Array.isArray(value.coordinates) || value.coordinates.length < 2 || value.coordinates.length > MAX_GEOMETRY_POINTS * 10) return null;
+  if (!isRecord(value) || value.type !== 'LineString' || !Array.isArray(value.coordinates) || value.coordinates.length < 2 || value.coordinates.length > MAX_GEOMETRY_POINTS) return null;
   const geometry = value.coordinates.map(toCoordinate);
   return geometry.every((point): point is Coordinate => point !== null) ? geometry : null;
 }
@@ -175,6 +183,60 @@ function endpointsCorrespond(geometry: Coordinate[], requested: Coordinate[], sn
     && coordinateDistanceKm(geometry.at(-1)!, requested.at(-1)!) <= MAX_ENDPOINT_OFFSET_KM
     && coordinateDistanceKm(geometry[0], startTarget) <= MAX_ENDPOINT_OFFSET_KM
     && coordinateDistanceKm(geometry.at(-1)!, finishTarget) <= MAX_ENDPOINT_OFFSET_KM;
+}
+
+function snappedWaypointsFollowGeometry(geometry: Coordinate[], waypoints: Coordinate[], legDistancesM: number[]) {
+  if (waypoints.length !== legDistancesM.length + 1 || geometry.length < 2) return false;
+  const cumulativeKm = cumulativeDistances(geometry);
+  const expectedKm = [0];
+  for (const distanceM of legDistancesM) expectedKm.push((expectedKm.at(-1) ?? 0) + distanceM / 1_000);
+  let previousAlongKm = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < waypoints.length; index += 1) {
+    const candidates = geometryPositions(waypoints[index], geometry, cumulativeKm)
+      .filter((candidate) => candidate.offsetKm <= MAX_WAYPOINT_GEOMETRY_OFFSET_KM && candidate.alongKm + distanceEvidenceToleranceKm(candidate.alongKm, expectedKm[index]) >= previousAlongKm);
+    if (!candidates.length) return false;
+    const selected = index === waypoints.length - 1
+      ? candidates.reduce((latest, candidate) => candidate.alongKm > latest.alongKm ? candidate : latest)
+      : candidates.reduce((earliest, candidate) => candidate.alongKm < earliest.alongKm ? candidate : earliest);
+    if (!distanceEvidenceMatches(selected.alongKm, expectedKm[index])) return false;
+    previousAlongKm = selected.alongKm;
+  }
+  return true;
+}
+
+function geometryPositions(point: Coordinate, geometry: Coordinate[], cumulativeKm: number[]) {
+  const positions: Array<{ alongKm: number; offsetKm: number }> = [];
+  for (let index = 1; index < geometry.length; index += 1) {
+    const start = geometry[index - 1];
+    const end = geometry[index];
+    const projection = projectCoordinate(point, start, end);
+    const segmentKm = cumulativeKm[index] - cumulativeKm[index - 1];
+    positions.push({
+      alongKm: cumulativeKm[index - 1] + segmentKm * projection.fraction,
+      offsetKm: projection.offsetKm,
+    });
+  }
+  return positions;
+}
+
+function projectCoordinate(point: Coordinate, start: Coordinate, end: Coordinate) {
+  const latitudeScale = Math.cos(radians((start.latitude + end.latitude + point.latitude) / 3));
+  const x = (point.longitude - start.longitude) * latitudeScale;
+  const y = point.latitude - start.latitude;
+  const endX = (end.longitude - start.longitude) * latitudeScale;
+  const endY = end.latitude - start.latitude;
+  const denominator = endX ** 2 + endY ** 2;
+  const fraction = denominator === 0 ? 0 : Math.max(0, Math.min(1, (x * endX + y * endY) / denominator));
+  const projected = { latitude: start.latitude + (end.latitude - start.latitude) * fraction, longitude: start.longitude + (end.longitude - start.longitude) * fraction };
+  return { fraction, offsetKm: coordinateDistanceKm(point, projected) };
+}
+
+function distanceEvidenceMatches(firstKm: number, secondKm: number) {
+  return Math.abs(firstKm - secondKm) <= distanceEvidenceToleranceKm(firstKm, secondKm);
+}
+
+function distanceEvidenceToleranceKm(firstKm: number, secondKm: number) {
+  return Math.max(DISTANCE_EVIDENCE_ERROR_KM, Math.max(Math.abs(firstKm), Math.abs(secondKm)) * DISTANCE_EVIDENCE_ERROR_RATIO);
 }
 
 function distanceMetadataMatches(totalDistanceM: number, legs: number[]) {
@@ -220,7 +282,7 @@ function routeFingerprint(route: RoutePlan) {
     familyId: route.familyId ?? null,
     variantId: route.variantId ?? null,
     revisionId: route.revisionId ?? null,
-    points: route.points.map((point) => `${point.latitude.toFixed(5)},${point.longitude.toFixed(5)}`),
+    points: route.points.map((point) => `${point.latitude.toFixed(6)},${point.longitude.toFixed(6)}`),
   });
 }
 
@@ -305,7 +367,9 @@ function perpendicularDistance(point: Coordinate, start: Coordinate, end: Coordi
   return Math.abs(dy * point.longitude - dx * point.latitude + end.longitude * start.latitude - end.latitude * start.longitude) / Math.hypot(dx, dy);
 }
 
-export const routerConfig = { baseUrl: ROUTER_BASE_URL, maxWaypoints: MAX_WAYPOINTS, maxGeometryPoints: MAX_GEOMETRY_POINTS, maxDistanceKm: MAX_ROUTED_DISTANCE_KM, cacheTtlMs: ROUTER_CACHE_TTL_MS, callsPerMinute: ROUTER_CALLS_PER_MINUTE };
+const ROUTER_SOURCE_LABEL = sourceLabelForRouter(ROUTER_BASE_URL);
+
+export const routerConfig = { baseUrl: ROUTER_BASE_URL, sourceLabel: ROUTER_SOURCE_LABEL, maxWaypoints: MAX_WAYPOINTS, maxGeometryPoints: MAX_GEOMETRY_POINTS, maxDistanceKm: MAX_ROUTED_DISTANCE_KM, cacheTtlMs: ROUTER_CACHE_TTL_MS, callsPerMinute: ROUTER_CALLS_PER_MINUTE };
 
 export function clearRouteGeometryCache() { geometryCache.clear(); geometryInFlight.clear(); routerWindowStartedAt = 0; routerWindowCalls = 0; }
 
@@ -325,7 +389,20 @@ function rebaseCachedGeometry(cached: RoutePlan, route: RoutePlan): RoutePlan {
     geometryKind: 'road_matched',
     geometryStatus: 'ready',
     distanceStatus: 'authoritative',
+    ...(cached.legDistancesKm ? { legDistancesKm: [...cached.legDistancesKm] } : {}),
+    ...(cached.routedDistanceKm !== undefined ? { routedDistanceKm: cached.routedDistanceKm } : {}),
     ...(route.provisionalDistanceKm !== undefined ? { provisionalDistanceKm: route.provisionalDistanceKm } : {}),
     distanceKm: cached.distanceKm,
   };
+}
+
+function sourceLabelForRouter(baseUrl: string) {
+  const configured = process.env.EXPO_PUBLIC_ROUTER_SOURCE?.trim();
+  if (configured) return configured;
+  try {
+    const hostname = new URL(baseUrl).hostname;
+    return hostname === 'routing.openstreetmap.de' ? 'OpenStreetMap routed-bike preview' : `Configured routed-bike provider (${hostname})`;
+  } catch {
+    return 'Configured routed-bike provider';
+  }
 }

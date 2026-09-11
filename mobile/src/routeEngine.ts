@@ -77,8 +77,20 @@ function withoutFinalMetrics(seed: RoutePlan, segments: RoutePlan['segments'] = 
     : Number.isFinite(seed.distanceKm) && seed.distanceKm >= 0
       ? seed.distanceKm
       : seed.points.at(-1)?.distanceKm ?? 0;
+  const downgradeInvalidRoad = seed.geometryKind === 'road_matched'
+    || (seed.geometryStatus === 'ready' && seed.geometryKind !== 'recorded_trace' && seed.geometryKind !== 'waypoint_trace');
   return {
     ...seed,
+    ...(downgradeInvalidRoad ? {
+      geometryKind: 'waypoint_trace' as const,
+      geometryStatus: 'unavailable' as const,
+      geometry: undefined,
+      geometryDistancesKm: undefined,
+      geometrySource: undefined,
+      corridor: undefined,
+      legDistancesKm: undefined,
+      routedDistanceKm: undefined,
+    } : {}),
     distanceKm: provisionalDistanceKm,
     provisionalDistanceKm,
     distanceStatus: 'provisional',

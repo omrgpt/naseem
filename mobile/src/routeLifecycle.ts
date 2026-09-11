@@ -115,6 +115,8 @@ export function beginRouteMatching(route: RouteRecord): RouteLifecycleState {
   const next = clone(validated.route);
   next.geometry = { kind: 'road_matched', status: 'matching', coordinates: [] };
   next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
+  next.legDistancesKm = undefined;
+  next.routedDistanceKm = undefined;
   next.revision += 1;
   next.analysis = undefined;
   return { state: 'matching', route: next, waypointCount: next.points.length, maxWaypoints: ROUTE_MATCHING_WAYPOINT_LIMIT };
@@ -127,8 +129,12 @@ export function routeMatchingSucceeded(route: RouteRecord, matchedPlan: RoutePla
   if (route.geometry.status !== 'matching'
     || route.geometry.kind !== 'road_matched'
     || matchedPlan.id !== route.id
+    // Legacy RoutePlan callers do not carry canonical identity fields. When
+    // supplied, every identity field must still match the matching revision.
     || (matchedPlan.revision !== undefined && matchedPlan.revision !== route.revision)
-    || (matchedPlan.revisionId !== undefined && route.revisionId !== undefined && matchedPlan.revisionId !== route.revisionId)
+    || (matchedPlan.familyId !== undefined && matchedPlan.familyId !== route.familyId)
+    || (matchedPlan.variantId !== undefined && matchedPlan.variantId !== route.variantId)
+    || (matchedPlan.revisionId !== undefined && matchedPlan.revisionId !== route.revisionId)
     || !routePlanHasAuthoritativeGeometry(matchedPlan)) return matchingFailure(route, 'invalidResponse');
   if (!coordinatesMatchEndpoints(coordinates, route.points) || !matchedPointsMatchRoute(matchedPlan.points, route.points)) return matchingFailure(route, 'invalidResponse');
   const next = clone(route);
@@ -140,6 +146,8 @@ export function routeMatchingSucceeded(route: RouteRecord, matchedPlan: RoutePla
     ...(matchedPlan.geometryDistancesKm ? { distancesKm: clone(matchedPlan.geometryDistancesKm) } : {}),
     ...(matchedPlan.geometrySource ? { source: matchedPlan.geometrySource } : {}),
   };
+  next.legDistancesKm = matchedPlan.legDistancesKm ? clone(matchedPlan.legDistancesKm) : undefined;
+  next.routedDistanceKm = matchedPlan.routedDistanceKm ?? matchedPlan.distanceKm;
   next.revision += 1;
   next.analysis = undefined;
   return { state: 'trace-ready', route: next };
@@ -162,6 +170,8 @@ export function waypointLimitExceeded(route: RouteRecord): WaypointLimitState {
     coordinates: next.points.map(toCoordinate),
   };
   next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
+  next.legDistancesKm = undefined;
+  next.routedDistanceKm = undefined;
   next.revision += 1;
   next.analysis = undefined;
   return {
@@ -186,6 +196,8 @@ export function traceReady(route: RouteRecord, kind: Extract<RouteGeometryKind, 
     coordinates: next.geometry.coordinates.length ? next.geometry.coordinates : next.points.map(toCoordinate),
   };
   next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
+  next.legDistancesKm = undefined;
+  next.routedDistanceKm = undefined;
   next.revision += 1;
   next.analysis = undefined;
   return { state: 'trace-ready', route: next };
@@ -198,8 +210,18 @@ export function savePersonalRoute(route: RouteRecord): RouteLifecycleState {
   if (state.state !== 'validated' || state.route.geometry.status !== 'ready') return state;
   const next = clone(state.route);
   if (next.ownership !== 'personal') {
+    const nextRevision = next.revision + 1;
+    if (next.ownership === 'catalog') {
+      next.id = `${next.id}-personal-r${nextRevision}`;
+      next.familyId = undefined;
+      next.variantId = undefined;
+      next.revisionId = undefined;
+      next.corridor = undefined;
+      next.origin = 'drawn';
+      next.provenance = { ...next.provenance, sourceId: next.id };
+    }
     next.ownership = 'personal';
-    next.revision += 1;
+    next.revision = nextRevision;
     next.analysis = undefined;
   }
   return { state: 'saved-personal', route: next };
@@ -285,9 +307,22 @@ export function reverseRoute(route: RouteRecord): ReverseRouteResult {
     status: 'draft',
     coordinates: next.points.map(toCoordinate),
   };
+  next.corridor = undefined;
+  next.legDistancesKm = undefined;
+  next.routedDistanceKm = undefined;
   next.provisionalDistanceKm = cumulativeDistanceKm;
   next.revision += 1;
-  if (next.revisionId) next.revisionId = `${next.revisionId}-r${next.revision}`;
+  if (route.ownership === 'catalog') {
+    next.id = `${route.id}-reverse-r${next.revision}`;
+    next.ownership = 'personal';
+    next.origin = 'drawn';
+    next.familyId = undefined;
+    next.variantId = undefined;
+    next.revisionId = undefined;
+    next.provenance = { ...next.provenance, source: 'Reversed route draft', sourceId: next.id };
+  } else if (next.revisionId) {
+    next.revisionId = `${next.revisionId}-r${next.revision}`;
+  }
   next.analysis = undefined;
   return { ok: true, state: 'draft', route: next };
 }
@@ -302,6 +337,8 @@ function matchingFailure(route: RouteRecord, reason: RouteMatchingFailureReason)
     coordinates: next.points.map(toCoordinate),
   };
   next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
+  next.legDistancesKm = undefined;
+  next.routedDistanceKm = undefined;
   if (route.geometry.status !== 'unavailable') next.revision += 1;
   next.analysis = undefined;
   return { state: 'matching-failed', route: next, reason, recoverable: true, recoveryActions: ['retry', 'edit-points'] };

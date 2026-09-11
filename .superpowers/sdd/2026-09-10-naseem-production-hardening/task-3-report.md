@@ -45,3 +45,62 @@ No screen, `App.tsx`, map, Settings, translation, or other worker-owned files we
 
 - Task 9 must replace the remaining readiness/origin inference in `mobile/src/screenTypes.ts` and `mobile/src/screens/screenTypes.ts`; those adapters can still infer status from legacy ID/source/geometry fields and may disagree with the canonical `RouteRecord`. They were intentionally not edited in Task 3.
 - Native OS permission, GPS watcher, and native map behavior remain device checks for the release gate.
+
+## Fix round — Mendel route-only review
+
+This follow-up stayed within the Task 3 route/domain files and the four allowed
+route test files.
+
+### Review findings addressed
+
+- Canonical readiness now recomputes the full geometry cumulative index and
+  checks every stored index with a documented 150 m / 2% tolerance. It also
+  reconciles point cumulative distances, provider leg distances, stored
+  geometry distance, recomputed geometry distance, and the provider routed
+  total before returning authoritative readiness. The raw geometry index is
+  preserved; the routed total is carried separately.
+- Provider validation now requires `geometry.type === "LineString"`, applies
+  the configured 700-point cap, and checks every snapped waypoint against the
+  returned polyline in route order and at its corresponding cumulative leg
+  distance. Configured router hosts receive a derived/configurable source
+  label, and the cache fingerprint uses the same six-decimal precision as the
+  request.
+- Removing final metrics from an invalid road-matched plan now explicitly
+  downgrades it to `waypoint_trace` / `unavailable` and clears road geometry,
+  corridor, leg, routed, and final metric evidence. Rematching clears stale
+  road evidence and analysis; the record-to-plan adapter only exposes analysis
+  for the current authoritative road revision (with the existing recorded
+  preview scalar-distance compatibility preserved).
+- Route identity linkage is checked for known family/variant/revision values.
+  Personal copies do not inherit catalog identity, catalog and personal IDs or
+  identity triples cannot collide in the repository, and catalog-to-personal
+  saves/reversals receive a distinct personal namespace. Reverse drafts clear
+  inherited corridors and routed evidence and retain only recomputed
+  provisional waypoint distance.
+
+### Fix-round TDD evidence
+
+- The first fix-round focused RED run covered 40 tests: 30 passed and 10
+  failed on the newly added review regressions.
+- Additional targeted RED cycles caught reuse of the catalog ID for a personal
+  copy, reuse of the exact catalog identity triple, and missing identity-link
+  validation before their minimal fixes.
+- The final focused route suite is GREEN: 47/47 passing.
+
+### Fix-round verification
+
+- `npx.cmd tsx --test src/routeRouter.test.ts src/routeMatcher.test.ts src/routeLifecycle.test.ts src/routeEngine.test.ts` — PASS, 47/47.
+- Full mobile test set via `Get-ChildItem src -Filter '*.test.ts'` — PASS, 191/191.
+- `npm.cmd run typecheck` — PASS.
+- `git diff --check` — PASS.
+
+### Remaining concerns
+
+- Task 9 still owns the readiness inference in `mobile/src/screenTypes.ts`
+  and `mobile/src/screens/screenTypes.ts`; those adapters were intentionally
+  not edited and can still disagree with canonical route truth.
+- Task 9 should also move App route selection off its current ID-keyed merge
+  when integrating catalog and personal copies; the repository boundary now
+  rejects those collisions, but `mobile/App.tsx` is out of scope here.
+- Native OS permission, GPS watcher, and native map behavior remain device
+  checks for the release gate.

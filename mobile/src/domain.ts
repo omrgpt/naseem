@@ -199,6 +199,10 @@ export type RoutePlan = {
    */
   geometry?: Coordinate[];
   geometryDistancesKm?: number[];
+  /** Per-leg distance evidence retained from the provider response. */
+  legDistancesKm?: number[];
+  /** Provider-reported routed total kept distinct from recomputed geometry. */
+  routedDistanceKm?: number;
   geometrySource?: string;
   /** Optional catalog corridor retained by the NBH preview adapter. */
   corridor?: RouteCorridor;
@@ -291,6 +295,9 @@ export type RouteRecord = {
   provenance: RouteProvenance;
   /** Geodesic/trace distance retained separately from any routed distance. */
   provisionalDistanceKm?: number;
+  /** Provider evidence retained so canonical readiness can reconcile every source. */
+  legDistancesKm?: number[];
+  routedDistanceKm?: number;
   analysis?: RouteAnalysisSnapshot;
 };
 
