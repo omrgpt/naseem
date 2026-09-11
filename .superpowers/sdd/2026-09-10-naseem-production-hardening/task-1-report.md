@@ -11,6 +11,15 @@ Implemented the map surface, geometry rendering, and provider fallback hardening
 - The additional point-only drawn-preview assertion was also run before its implementation and failed as expected.
 - After the smallest production changes, the focused command is GREEN with 108/108 tests passing.
 
+## Fix-round reviewer follow-up
+
+- Added a second RED cycle for the reviewer findings: the focused command ran 114 tests, with 107 passing and 7 failing for the missing fallback, viewport helpers, strict coordinate guards, distinct geometry states, hit-size contract, and layer-boundary contract.
+- The native renderer now calls the provider selector and renders a rider-facing named-point fallback instead of mounting `react-native-maps` on Android without the existing native key. Configured native builds retain the existing provider default; web remains OpenStreetMap.
+- Marker-only previews now have validated display points, shared bounds/center data, and fit behavior on both web and native. These viewport coordinates are never passed to a line renderer.
+- Coordinate validation is centralized, rejects null/non-numeric/out-of-range/pole coordinates, filters malformed route points, guards native map presses and user markers, and clamps Web Mercator input to a finite projection range.
+- The map contract documents and tests that forecast data and durable selection state remain screen-owned. The renderer receives only route/access evidence, read-only focus/endpoint hints, callbacks, and supplied live-position coordinates.
+- Added distinct rider-facing unavailable, draft, and no-geometry labels, plus 44px marker hit targets on web and native.
+
 ## Implementation
 
 - Road styling is strict: only finite, in-range geometry explicitly marked `geometryKind: "road_matched"` and `geometryStatus: "ready"` can be a solid line.
@@ -22,11 +31,12 @@ Implemented the map surface, geometry rendering, and provider fallback hardening
 
 ## Verification
 
-- `npm.cmd test -- src/mapModel.test.ts src/mapPreviewContract.test.ts` — PASS (108/108).
+- `npm.cmd test -- src/mapModel.test.ts src/mapPreviewContract.test.ts` — PASS (114/114).
 - `npm.cmd run typecheck` — PASS.
 - `git diff --check` — PASS.
 
 ## Concerns
 
 - Native iOS/Android runtime behavior, OS permission prompts, and device-specific map attribution were not exercised on a physical device in this worktree.
-- `mapGeometryStatus` retains a compatibility result for legacy metadata-less direct callers, while the actual map line model uses the strict renderer status so those coordinates cannot appear as a solid road route.
+- `mapGeometryStatus` is retained only as a documented non-rendering compatibility adapter for legacy direct callers; the actual map line model uses strict explicit geometry metadata and never uses that adapter for line status or viewport fitting.
+- No native physical device was available for this round, so Android/iOS provider runtime behavior, OS permissions, and native attribution still require device verification.

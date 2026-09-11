@@ -1,20 +1,26 @@
 import { useEffect, useRef } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polyline, type Region } from "react-native-maps";
 import type { Coordinate, RoadKind } from "./domain";
 import type { MapPreviewProps, MapText } from "./MapPreview";
 import {
   MAP_BOTTOM_SAFE_ZONE,
   MAP_CONTROL_CLEARANCE,
+  MAP_MARKER_HIT_SIZE,
   hasFiniteCoordinate,
+  mapDisplayBounds,
+  selectMapProvider,
   shouldShowMinimalMapControls,
   shouldShowUserLocationControl,
 } from "./mapPreviewContract";
 import {
+  mapDisplayPoints,
   mapIsLoop,
   mapLineModel,
   mapMarkerPoints,
+  mapRoadKindAt,
   mapSegmentIndexForLine,
+  mapViewportPoints,
   normalizeSelectedSegment,
 } from "./mapModel";
 import {
@@ -58,6 +64,11 @@ export function MapPreview({
   mapText,
 }: Props) {
   const mapRef = useRef<MapView>(null);
+  const mapProvider = selectMapProvider({
+    platform: Platform.OS === "android" ? "android" : "ios",
+    googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
+  });
+  const nativeMapUnavailable = mapProvider === "native-fallback";
   const showUserLocationControl = shouldShowUserLocationControl(
     showUserLocation,
     userCoordinate,
@@ -65,6 +76,7 @@ export function MapPreview({
   const lineModel = mapLineModel(route, mapText?.status);
   const { linePoints, lineStyle, roadMatched } = lineModel;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
+  const displayPoints = mapDisplayPoints(route);
   const focusSegment = normalizeSelectedSegment(selectedSegment);
   const roadLabelFor = (kind: RoadKind) =>
     roadLabels?.[kind] ??
@@ -77,27 +89,71 @@ export function MapPreview({
     latitude,
     longitude,
   }));
+  const displayCoordinates = displayPoints.map(({ latitude, longitude }) => ({
+    latitude,
+    longitude,
+  }));
+  const viewportPoints = mapViewportPoints(
+    route,
+    linePoints.length >= 2 ? linePoints : displayCoordinates,
+  );
+  const viewportBounds = mapDisplayBounds(viewportPoints);
+  const viewportCoordinates = viewportPoints.map(({ latitude, longitude }) => ({
+    latitude,
+    longitude,
+  }));
   const geometryKey = linePoints
     .map(({ latitude, longitude }) => `${latitude},${longitude}`)
     .join("|");
-  const first = coordinates[0] ?? { latitude: 26.18, longitude: 50.53 };
+  const viewportKey = viewportPoints
+    .map(({ latitude, longitude }) => `${latitude},${longitude}`)
+    .join("|");
+  const first = viewportBounds.center;
   const initialRegion = {
     latitude: first.latitude,
     longitude: first.longitude,
-    latitudeDelta: route.id === "nbh-loop" ? 0.19 : 0.08,
-    longitudeDelta: route.id === "nbh-loop" ? 0.23 : 0.12,
+    latitudeDelta: viewportCoordinates.length
+      ? clamp(viewportBounds.latitudeDelta, 0.002, 3)
+      : route.id === "nbh-loop"
+        ? 0.19
+        : 0.08,
+    longitudeDelta: viewportCoordinates.length
+      ? clamp(viewportBounds.longitudeDelta, 0.002, 3)
+      : route.id === "nbh-loop"
+        ? 0.23
+        : 0.12,
   };
   const regionRef = useRef<Region>(initialRegion);
   const fitToRoute = () => {
-    if (coordinates.length < 2) return;
-    mapRef.current?.fitToCoordinates(coordinates, {
-      edgePadding: { top: 70, right: 34, bottom: 82, left: 34 },
-      animated: true,
-    });
+    if (nativeMapUnavailable) return;
+    const fitCoordinates = coordinates.length >= 2 ? coordinates : viewportCoordinates;
+    if (fitCoordinates.length >= 2) {
+      mapRef.current?.fitToCoordinates(fitCoordinates, {
+        edgePadding: {
+          top: 70,
+          right: 34,
+          bottom: MAP_BOTTOM_SAFE_ZONE + MAP_CONTROL_CLEARANCE,
+          left: 34,
+        },
+        animated: true,
+      });
+      return;
+    }
+    if (fitCoordinates.length === 1) {
+      const next = {
+        ...regionRef.current,
+        latitude: viewportBounds.center.latitude,
+        longitude: viewportBounds.center.longitude,
+        latitudeDelta: clamp(viewportBounds.latitudeDelta, 0.002, 3),
+        longitudeDelta: clamp(viewportBounds.longitudeDelta, 0.002, 3),
+      };
+      regionRef.current = next;
+      mapRef.current?.animateToRegion(next, 180);
+    }
   };
   useEffect(() => {
     fitToRoute();
-  }, [route.id, route.revisionId, geometryKey]);
+  }, [route.id, route.revisionId, geometryKey, viewportKey, nativeMapUnavailable]);
   const reset = () => {
     fitToRoute();
     onReset?.();
@@ -137,6 +193,9 @@ export function MapPreview({
     statusMatched: rtl ? "مطابق للطرق" : "ROAD-MATCHED",
     statusLoading: rtl ? "جارٍ مطابقة الطرق" : "MATCHING ROADS",
     statusPilot: rtl ? "معاينة المسار" : "ROUTE PREVIEW",
+    statusUnavailable: rtl ? "المسار غير متاح" : "ROUTE UNAVAILABLE",
+    statusDraft: rtl ? "مسودة المسار" : "ROUTE DRAFT",
+    statusEmpty: rtl ? "لا توجد هندسة للمسار" : "NO ROUTE GEOMETRY",
     providerUnavailable: rtl
       ? "يحتاج مزود الخريطة إلى إعداد؛ يبقى المسار متاحاً."
       : "Map provider needs configuration; the route remains available.",
@@ -165,6 +224,18 @@ export function MapPreview({
     userLocation: rtl ? "موقعك الحالي" : "Current location",
     ...mapText,
   };
+  const activeEndpointLabel = activeEndpoint
+    ? text.activeEndpointLabel ??
+      (rtl
+        ? `اختر ${activeEndpoint === "start" ? "البداية" : "الوجهة"} على الخريطة`
+        : `Choose ${activeEndpoint === "start" ? "Start" : "Destination"} on the map`)
+      : undefined;
+  const nativeProviderMessage =
+    text.nativeNeedsKey ??
+    text.providerUnavailable ??
+    (rtl
+      ? "يحتاج مزود الخريطة إلى إعداد؛ يبقى المسار متاحاً."
+      : "Map provider needs configuration; the route remains available.");
   const showMinimalControls = shouldShowMinimalMapControls(compact, minimal);
   const mapStatus = lineModel.status;
   const isLoopRoute = mapIsLoop(route);
@@ -173,7 +244,13 @@ export function MapPreview({
       ? text.statusMatched
       : mapStatus === "loading"
         ? text.statusLoading
-        : text.statusPilot;
+        : mapStatus === "unavailable"
+          ? text.statusUnavailable
+          : mapStatus === "draft"
+            ? text.statusDraft
+            : mapStatus === "empty"
+              ? text.statusEmpty
+              : text.statusPilot;
   const mapLabel =
     text.mapLabel ??
     (rtl ? `خريطة المسار: ${route.name}` : `${route.name} native map`);
@@ -213,7 +290,7 @@ export function MapPreview({
   };
   const pointLabels = markerEntries.map(pointLabel);
   const accessiblePointLabels = pointLabels;
-  const mapSummary = `${mapLabel}. ${statusLabel}.${activeEndpoint ? ` ${text.activeEndpointLabel}.` : ""}${compact ? "" : ` ${text.native}. ${routePointsLabel}: ${accessiblePointLabels.length ? accessiblePointLabels.join(". ") : rtl ? "لا توجد نقاط مسار." : "No route points."}`}`;
+  const mapSummary = `${mapLabel}. ${statusLabel}.${nativeMapUnavailable ? ` ${nativeProviderMessage}.` : ""}${activeEndpointLabel ? ` ${activeEndpointLabel}.` : ""}${compact ? "" : ` ${text.native}. ${routePointsLabel}: ${accessiblePointLabels.length ? accessiblePointLabels.join(". ") : rtl ? "لا توجد نقاط مسار." : "No route points."}`}`;
   const mapDetailsId = `map-details-${route.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   return (
     <View
@@ -226,6 +303,39 @@ export function MapPreview({
       accessibilityLabel={mapLabel}
       role="group"
     >
+      {nativeMapUnavailable ? (
+        <View
+          testID="native-map-provider-fallback"
+          style={styles.providerFallback}
+          accessible
+          accessibilityRole="alert"
+          accessibilityLabel={nativeProviderMessage}
+          accessibilityLiveRegion="polite"
+        >
+          <Text style={[styles.providerNoticeText, rtl && styles.arabicMeta]}>
+            {nativeProviderMessage}
+          </Text>
+          <Text style={[styles.mapFootText, rtl && styles.arabicMeta]}>
+            {text.native}
+          </Text>
+          <View
+            role="list"
+            accessibilityLabel={routePointsLabel}
+            style={styles.providerFallbackPoints}
+          >
+            {accessiblePointLabels.map((label, index) => (
+              <Text
+                key={`${route.id}-fallback-point-${index}`}
+                role="listitem"
+                accessibilityLabel={label}
+                style={[styles.providerFallbackPoint, rtl && styles.arabicMeta]}
+              >
+                {label}
+              </Text>
+            ))}
+          </View>
+        </View>
+      ) : (
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -233,7 +343,7 @@ export function MapPreview({
         mapType="standard"
         showsCompass
         showsScale
-        showsUserLocation={showUserLocation}
+        showsUserLocation={showUserLocation && hasFiniteCoordinate(userCoordinate)}
         showsMyLocationButton={false}
         zoomEnabled
         scrollEnabled
@@ -249,7 +359,10 @@ export function MapPreview({
         onRegionChangeComplete={(next) => {
           regionRef.current = next;
         }}
-        onPress={(event) => onMapPress?.(event.nativeEvent.coordinate)}
+        onPress={(event) => {
+          const coordinate = event.nativeEvent?.coordinate;
+          if (hasFiniteCoordinate(coordinate)) onMapPress?.(coordinate);
+        }}
       >
         {linePoints.slice(0, -1).map((point, index) => {
           const next = linePoints[index + 1];
@@ -259,8 +372,7 @@ export function MapPreview({
             index,
             linePoints.length,
           );
-          const kind =
-            route.points[segmentIndex]?.suitability.kind ?? "unknown";
+          const kind = mapRoadKindAt(route, segmentIndex);
           return (
             <Polyline
               key={`${route.id}-line-${index}`}
@@ -299,7 +411,7 @@ export function MapPreview({
               onPress={onSelectPoint ? () => onSelectPoint(entry.routePoint) : undefined}
               accessibilityRole={onSelectPoint ? "button" : "image"}
               accessibilityLabel={pointLabels[index]}
-              accessibilityHint={onSelectPoint ? text.activeEndpointLabel : undefined}
+              accessibilityHint={onSelectPoint ? activeEndpointLabel : undefined}
               title={
                 entry.isLoop && entry.isStart
                   ? `${rtl ? (entry.routePoint.nameAr ?? entry.routePoint.name) : entry.routePoint.name} · ${text.loop}`
@@ -309,19 +421,21 @@ export function MapPreview({
               }
               description={roadLabelFor(entry.routePoint.suitability.kind)}
             >
-              <View
-                accessible={false}
-                style={[
-                  styles.marker,
-                  entry.isStart && styles.startMarker,
-                  entry.isLoop && entry.isStart && styles.loopMarker,
-                  !entry.isLoop &&
-                    !entry.isStart &&
-                    !entry.isEnd &&
-                    styles.midMarker,
-                ]}
-              >
-                <Text style={styles.markerText}>{markerText}</Text>
+              <View style={styles.markerHitTarget} accessible={false}>
+                <View
+                  accessible={false}
+                  style={[
+                    styles.marker,
+                    entry.isStart && styles.startMarker,
+                    entry.isLoop && entry.isStart && styles.loopMarker,
+                    !entry.isLoop &&
+                      !entry.isStart &&
+                      !entry.isEnd &&
+                      styles.midMarker,
+                  ]}
+                >
+                  <Text style={styles.markerText}>{markerText}</Text>
+                </View>
               </View>
             </Marker>
           );
@@ -337,6 +451,7 @@ export function MapPreview({
           </Marker>
         )}
       </MapView>
+      )}
       {!minimal && (
         <View
           style={[styles.mapHeader, rtl && styles.overlayRtl]}
@@ -384,6 +499,8 @@ export function MapPreview({
                   ? styles.statusMatched
                   : mapStatus === "loading"
                     ? styles.statusLoading
+                    : mapStatus === "unavailable" || mapStatus === "draft"
+                      ? styles.statusLoading
                     : styles.statusPilot,
                 rtl && styles.statusPillRtl,
               ]}
@@ -402,7 +519,7 @@ export function MapPreview({
           pointerEvents="none"
           accessible
           accessibilityRole="text"
-          accessibilityLabel={text.activeEndpointLabel}
+          accessibilityLabel={activeEndpointLabel}
           accessibilityLiveRegion="polite"
           aria-live="polite"
           style={styles.activeEndpointOverlay}
@@ -410,7 +527,7 @@ export function MapPreview({
           <View style={styles.activeEndpointCrosshair} />
           <View style={styles.activeEndpointBadge}>
             <Text style={[styles.activeEndpointText, rtl && styles.arabicControl]}>
-              {text.activeEndpointLabel}
+              {activeEndpointLabel}
             </Text>
           </View>
         </View>
@@ -604,6 +721,24 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "#FFFFFF",
   },
+  providerFallback: {
+    ...StyleSheet.absoluteFill,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    backgroundColor: "#E9F0F0",
+  },
+  providerFallbackPoints: {
+    alignSelf: "stretch",
+    marginTop: 12,
+    gap: 6,
+  },
+  providerFallbackPoint: {
+    color: "#38575B",
+    fontFamily: FONT_REGULAR,
+    fontSize: 11,
+    textAlign: "center",
+  },
   activeEndpointOverlay: {
     position: "absolute",
     top: "50%",
@@ -693,6 +828,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#102A2E",
     borderWidth: 2,
     borderColor: "#FFFFFF",
+  },
+  markerHitTarget: {
+    width: MAP_MARKER_HIT_SIZE,
+    height: MAP_MARKER_HIT_SIZE,
+    alignItems: "center",
+    justifyContent: "center",
   },
   startMarker: { backgroundColor: "#A94B31" },
   loopMarker: { minWidth: 38, borderRadius: 19 },

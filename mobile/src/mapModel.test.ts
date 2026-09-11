@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { RoutePlan } from './domain';
+import * as mapModel from './mapModel';
+import * as mapPreviewContract from './mapPreviewContract';
 import {
   mapGeometryStatus,
   mapLineModel,
@@ -113,9 +115,113 @@ test('non-finite geometry coordinates cannot become a rendered line', () => {
   assert.equal(model.roadMatched, false);
 });
 
+test('malformed route points including null do not throw or become marker coordinates', () => {
+  const validPoint = baseRoute.points[1];
+  const route = {
+    ...baseRoute,
+    points: [
+      null,
+      { ...validPoint, latitude: 90 },
+      validPoint,
+    ] as unknown as RoutePlan['points'],
+    geometry: [null, { latitude: 90, longitude: 50.5 }] as unknown as RoutePlan['geometry'],
+  };
+
+  assert.doesNotThrow(() => mapLineModel(route));
+  const model = mapLineModel(route);
+  assert.deepEqual(model.linePoints, []);
+  assert.deepEqual(
+    mapMarkerPoints(route, model.linePoints, model.roadMatched).map(
+      (marker) => marker.routePoint.name,
+    ),
+    [validPoint.name],
+  );
+});
+
+test('marker-only previews expose separate validated viewport points and bounds', () => {
+  const mapDisplayPoints = (
+    mapModel as typeof mapModel & {
+      mapDisplayPoints?: (route: RoutePlan) => Array<{ latitude: number; longitude: number }>;
+      mapViewportPoints?: (
+        route: RoutePlan,
+        linePoints?: Array<{ latitude: number; longitude: number }>,
+      ) => Array<{ latitude: number; longitude: number }>;
+    }
+  ).mapDisplayPoints;
+  const mapViewportPoints = (
+    mapModel as typeof mapModel & {
+      mapViewportPoints?: (
+        route: RoutePlan,
+        linePoints?: Array<{ latitude: number; longitude: number }>,
+      ) => Array<{ latitude: number; longitude: number }>;
+    }
+  ).mapViewportPoints;
+  const mapDisplayBounds = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      mapDisplayBounds?: (points: readonly unknown[]) => {
+        coordinates: Array<{ latitude: number; longitude: number }>;
+        center: { latitude: number; longitude: number };
+        latitudeDelta: number;
+        longitudeDelta: number;
+      };
+    }
+  ).mapDisplayBounds;
+  assert.equal(typeof mapDisplayPoints, 'function');
+  assert.equal(typeof mapViewportPoints, 'function');
+  assert.equal(typeof mapDisplayBounds, 'function');
+  if (!mapDisplayPoints || !mapViewportPoints || !mapDisplayBounds) return;
+
+  const route = {
+    ...baseRoute,
+    geometry: undefined,
+    points: [
+      { ...baseRoute.points[0], latitude: 26.1, longitude: 50.4 },
+      { ...baseRoute.points[1], latitude: 26.2, longitude: 50.7 },
+    ],
+  };
+  const linePoints = mapLineModel(route).linePoints;
+  const displayPoints = mapDisplayPoints(route);
+  const viewportPoints = mapViewportPoints(route, linePoints);
+  const bounds = mapDisplayBounds(viewportPoints);
+
+  assert.deepEqual(linePoints, []);
+  assert.deepEqual(viewportPoints, displayPoints);
+  assert.deepEqual(bounds.coordinates, displayPoints);
+  assert.deepEqual(bounds.center, { latitude: 26.15, longitude: 50.55 });
+  assert.ok(Number.isFinite(bounds.latitudeDelta));
+  assert.ok(Number.isFinite(bounds.longitudeDelta));
+  assert.ok(bounds.latitudeDelta > 0);
+  assert.ok(bounds.longitudeDelta > 0);
+});
+
+test('geometry status keeps unavailable, draft, matching, and empty states distinct', () => {
+  const unavailable = mapLineModel({
+    ...baseRoute,
+    geometryKind: 'waypoint_trace' as const,
+    geometryStatus: 'unavailable' as const,
+  } as RoutePlan & { geometryKind: 'waypoint_trace'; geometryStatus: 'unavailable' });
+  const draft = mapLineModel({
+    ...baseRoute,
+    geometry: [baseRoute.points[0], baseRoute.points[1]],
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'draft' as const,
+  } as RoutePlan & { geometryKind: 'road_matched'; geometryStatus: 'draft' });
+  const matching = mapLineModel({
+    ...baseRoute,
+    geometryKind: 'road_matched' as const,
+    geometryStatus: 'matching' as const,
+  } as RoutePlan & { geometryKind: 'road_matched'; geometryStatus: 'matching' });
+  const empty = mapLineModel({ ...baseRoute, geometry: [] });
+
+  assert.equal(unavailable.status as string, 'unavailable');
+  assert.equal(draft.status as string, 'draft');
+  assert.equal(matching.status as string, 'loading');
+  assert.equal(empty.status as string, 'empty');
+});
+
 test('a stale matched request stays a preview when dense geometry is absent', () => {
   assert.equal(mapGeometryStatus(baseRoute, 'matched'), 'pilot');
-  assert.equal(mapLineModel({ ...baseRoute }, 'matched').status, 'pilot');
+  assert.equal(mapLineModel({ ...baseRoute }, 'matched').status, 'empty');
 });
 
 test('recorded geometry stays a dashed preview even when it has coordinates', () => {

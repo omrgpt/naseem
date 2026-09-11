@@ -15,6 +15,9 @@ export type MapText = {
   statusMatched?: string;
   statusLoading?: string;
   statusPilot?: string;
+  statusUnavailable?: string;
+  statusDraft?: string;
+  statusEmpty?: string;
   providerUnavailable?: string;
   tilesUnavailable?: string;
   zoomIn?: string;
@@ -37,13 +40,20 @@ export type MapText = {
   ) => string;
 };
 
-/** Shared map contract consumed by the web and react-native renderers. */
+/**
+ * Shared map contract consumed by the web and react-native renderers.
+ * Forecast data and durable selection state are intentionally not renderer
+ * inputs: screens own those layers and pass only route/access evidence,
+ * optional read-only focus/endpoint hints, callbacks, and a supplied live
+ * coordinate for display.
+ */
 export type MapPreviewProps = {
   route: RoutePlan;
   compact?: boolean;
   fullScreen?: boolean;
   /** A map-first surface owns its surrounding copy and legend in its sheet. */
   minimal?: boolean;
+  /** A read-only visual focus hint; the screen still owns selection state. */
   selectedSegment?: number;
   rtl?: boolean;
   /** Enables the renderer-owned center control when paired with a coordinate. */

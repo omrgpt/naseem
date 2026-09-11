@@ -21,16 +21,21 @@ import Svg, { Polyline as SvgPolyline } from "react-native-svg";
 import type { Coordinate, RoadKind, RoutePlan } from "./domain";
 import type { MapPreviewProps } from "./MapPreview";
 import {
+  MAP_MARKER_HIT_SIZE,
   hasFiniteCoordinate,
   mapControlLayout,
+  mapDisplayBounds,
   shouldShowMinimalMapControls,
   shouldShowUserLocationControl,
 } from "./mapPreviewContract";
 import {
   mapIsLoop,
+  mapDisplayPoints,
   mapLineModel,
   mapMarkerPoints,
+  mapRoadKindAt,
   mapSegmentIndexForLine,
+  mapViewportPoints,
   normalizeSelectedSegment,
 } from "./mapModel";
 type Props = MapPreviewProps;
@@ -82,10 +87,19 @@ export function MapPreview({
     route,
     mapText?.status,
   );
+  const displayPoints = mapDisplayPoints(route);
+  const viewportPoints = mapViewportPoints(
+    route,
+    linePoints.length >= 2 ? linePoints : displayPoints,
+  );
+  const viewportBounds = mapDisplayBounds(viewportPoints);
   const geometryKey = linePoints
     .map(({ latitude, longitude }) => `${latitude},${longitude}`)
     .join("|");
-  const routeCenter = centerOf(linePoints);
+  const viewportKey = viewportPoints
+    .map(({ latitude, longitude }) => `${latitude},${longitude}`)
+    .join("|");
+  const routeCenter = viewportBounds.center;
   const [mapCenter, setMapCenter] = useState(routeCenter);
   const [zoomOffset, setZoomOffset] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -101,7 +115,7 @@ export function MapPreview({
   panRef.current = pan;
   const zoom = Math.max(
     9,
-    Math.min(16, fitZoom(linePoints, width, height) + zoomOffset),
+    Math.min(16, fitZoom(viewportBounds.coordinates, width, height) + zoomOffset),
   );
   const center = mapCenter;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
@@ -162,6 +176,9 @@ export function MapPreview({
     statusMatched: rtl ? "مطابق للطرق" : "ROAD-MATCHED",
     statusLoading: rtl ? "جارٍ مطابقة الطرق" : "MATCHING ROADS",
     statusPilot: rtl ? "معاينة المسار" : "ROUTE PREVIEW",
+    statusUnavailable: rtl ? "المسار غير متاح" : "ROUTE UNAVAILABLE",
+    statusDraft: rtl ? "مسودة المسار" : "ROUTE DRAFT",
+    statusEmpty: rtl ? "لا توجد هندسة للمسار" : "NO ROUTE GEOMETRY",
     tilesUnavailable: rtl
       ? "بلاطات الخريطة غير متاحة؛ يبقى المسار ظاهراً."
       : "Map tiles are unavailable; the route remains visible.",
@@ -194,6 +211,12 @@ export function MapPreview({
     userLocation: rtl ? "موقعك الحالي" : "Current location",
     ...mapText,
   };
+  const activeEndpointLabel = activeEndpoint
+    ? text.activeEndpointLabel ??
+      (rtl
+        ? `اختر ${activeEndpoint === "start" ? "البداية" : "الوجهة"} على الخريطة`
+        : `Choose ${activeEndpoint === "start" ? "Start" : "Destination"} on the map`)
+    : undefined;
   const showMinimalControls = shouldShowMinimalMapControls(compact, minimal);
   const showUserLocationControl = shouldShowUserLocationControl(
     showUserLocation,
@@ -205,7 +228,13 @@ export function MapPreview({
       ? text.statusMatched
       : mapStatus === "loading"
         ? text.statusLoading
-        : text.statusPilot;
+        : mapStatus === "unavailable"
+          ? text.statusUnavailable
+          : mapStatus === "draft"
+            ? text.statusDraft
+            : mapStatus === "empty"
+              ? text.statusEmpty
+              : text.statusPilot;
   const focusSegment = normalizeSelectedSegment(selectedSegment);
   const [tileUnavailable, setTileUnavailable] = useState(false);
   const [mapFocused, setMapFocused] = useState(false);
@@ -229,12 +258,20 @@ export function MapPreview({
       typeof native.locationX === "number" ? native.locationX : native.offsetX;
     const y =
       typeof native.locationY === "number" ? native.locationY : native.offsetY;
-    if (typeof x === "number" && typeof y === "number") return { x, y };
+    if (
+      typeof x === "number" &&
+      typeof y === "number" &&
+      Number.isFinite(x) &&
+      Number.isFinite(y)
+    )
+      return { x, y };
     const rect = rawEvent.currentTarget?.getBoundingClientRect?.();
     if (
       rect &&
       typeof native.pageX === "number" &&
-      typeof native.pageY === "number"
+      typeof native.pageY === "number" &&
+      Number.isFinite(native.pageX) &&
+      Number.isFinite(native.pageY)
     )
       return { x: native.pageX - rect.left, y: native.pageY - rect.top };
     return undefined;
@@ -325,7 +362,7 @@ export function MapPreview({
         clickTimeoutRef.current = undefined;
       }
     };
-  }, [route.id, route.revisionId, geometryKey]);
+  }, [route.id, route.revisionId, geometryKey, viewportKey]);
   const centerOnUserLocation = () => {
     if (!showUserLocationControl || !hasFiniteCoordinate(userCoordinate)) return;
     setMapCenter({
@@ -351,6 +388,7 @@ export function MapPreview({
       },
       zoom,
     );
+    if (!hasFiniteCoordinate(coordinate)) return;
     if (clickTimeoutRef.current !== undefined)
       clearTimeout(clickTimeoutRef.current);
     clickTimeoutRef.current = setTimeout(() => {
@@ -581,7 +619,8 @@ export function MapPreview({
                 accessible
                 accessibilityRole={onSelectPoint ? "button" : "image"}
                 accessibilityLabel={pointLabels[index]}
-                accessibilityHint={onSelectPoint ? text.activeEndpointLabel : undefined}
+                accessibilityHint={onSelectPoint ? activeEndpointLabel : undefined}
+                hitSlop={4}
                 onPress={
                   onSelectPoint
                     ? (event: any) => {
@@ -592,7 +631,10 @@ export function MapPreview({
                 }
                 style={[
                   styles.webMarker,
-                  { left: entry.position.x - 10, top: entry.position.y - 10 },
+                  {
+                    left: entry.position.x - MAP_MARKER_HIT_SIZE / 2,
+                    top: entry.position.y - MAP_MARKER_HIT_SIZE / 2,
+                  },
                   entry.isStart && styles.startMarker,
                   entry.isLoop && entry.isStart && styles.loopMarker,
                   !entry.isLoop &&
@@ -624,14 +666,14 @@ export function MapPreview({
           pointerEvents="none"
           accessible
           accessibilityRole="text"
-          accessibilityLabel={text.activeEndpointLabel}
+          accessibilityLabel={activeEndpointLabel}
           aria-live="polite"
           style={styles.activeEndpointOverlay}
         >
           <View style={styles.activeEndpointCrosshair} />
           <View style={styles.activeEndpointBadge}>
             <Text style={[styles.activeEndpointText, rtl && styles.arabicControl]}>
-              {text.activeEndpointLabel}
+              {activeEndpointLabel}
             </Text>
           </View>
         </View>
@@ -701,6 +743,8 @@ export function MapPreview({
                   ? styles.statusMatched
                   : mapStatus === "loading"
                     ? styles.statusLoading
+                    : mapStatus === "unavailable" || mapStatus === "draft"
+                      ? styles.statusLoading
                     : styles.statusPilot,
                 rtl && styles.statusPillRtl,
               ]}
@@ -926,12 +970,12 @@ function buildLinePaths(
   const paths: ColoredPath[] = [];
   let current: ColoredPath = {
     points: [positions[0]],
-    color: COLORS[route.points[0]?.suitability.kind ?? "unknown"],
+    color: COLORS[mapRoadKindAt(route, 0)],
     segmentIndexes: [],
   };
   for (let index = 0; index < positions.length - 1; index += 1) {
     const segmentIndex = mapSegmentIndexForLine(route, index, positions.length);
-    const kind = route.points[segmentIndex]?.suitability.kind ?? "unknown";
+    const kind = mapRoadKindAt(route, segmentIndex);
     const color = COLORS[kind];
     if (current.points.length > 1 && current.color !== color) {
       paths.push(current);
@@ -963,15 +1007,6 @@ function toPosition(
     y: height / 2 + projected.y - centerWorld.y + pan.y,
   };
 }
-function centerOf(points: Coordinate[]) {
-  if (!points.length) return { latitude: 26.18, longitude: 50.53 };
-  const latitudes = points.map((point) => point.latitude);
-  const longitudes = points.map((point) => point.longitude);
-  return {
-    latitude: (Math.min(...latitudes) + Math.max(...latitudes)) / 2,
-    longitude: (Math.min(...longitudes) + Math.max(...longitudes)) / 2,
-  };
-}
 function fitZoom(points: Coordinate[], width: number, height: number) {
   if (points.length < 2) return 13;
   for (let zoom = 16; zoom >= 9; zoom -= 1) {
@@ -988,8 +1023,10 @@ function fitZoom(points: Coordinate[], width: number, height: number) {
 }
 function project(point: Coordinate, zoom: number) {
   const scale = 256 * 2 ** zoom;
-  const x = ((point.longitude + 180) / 360) * scale;
-  const sinLatitude = Math.sin((point.latitude * Math.PI) / 180);
+  const longitude = Math.max(-180, Math.min(180, point.longitude));
+  const latitude = Math.max(-85.05112878, Math.min(85.05112878, point.latitude));
+  const x = ((longitude + 180) / 360) * scale;
+  const sinLatitude = Math.sin((latitude * Math.PI) / 180);
   const y =
     (0.5 - Math.log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * Math.PI)) *
     scale;
@@ -1035,10 +1072,10 @@ const styles = StyleSheet.create({
   routeOverlay: { ...StyleSheet.absoluteFill },
   webMarker: {
     position: "absolute",
-    height: 22,
-    minWidth: 22,
+    minHeight: MAP_MARKER_HIT_SIZE,
+    minWidth: MAP_MARKER_HIT_SIZE,
     paddingHorizontal: 3,
-    borderRadius: 11,
+    borderRadius: MAP_MARKER_HIT_SIZE / 2,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#102A2E",

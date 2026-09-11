@@ -1,4 +1,5 @@
-import type { Coordinate, RoutePlan, RoutePoint } from './domain';
+import type { Coordinate, RoadKind, RoutePlan, RoutePoint } from './domain';
+import { hasFiniteCoordinate, validDisplayCoordinates } from './mapPreviewContract';
 
 export type MapMarker = {
   coordinate: Coordinate;
@@ -10,12 +11,13 @@ export type MapMarker = {
 };
 
 export type MapGeometryStatus = 'matched' | 'loading' | 'pilot';
+export type MapRenderStatus = MapGeometryStatus | 'unavailable' | 'draft' | 'empty';
 
 export type MapLineModel = {
   linePoints: Coordinate[];
   lineStyle: 'solid' | 'dashed' | 'none';
   roadMatched: boolean;
-  status: MapGeometryStatus;
+  status: MapRenderStatus;
 };
 
 type RouteWithGeometryMetadata = RoutePlan & {
@@ -26,7 +28,7 @@ type RouteWithGeometryMetadata = RoutePlan & {
 /** Dense geometry is the only road-following line the map is allowed to draw. */
 export function mapLinePoints(route: RoutePlan): Coordinate[] {
   const metadata = route as RouteWithGeometryMetadata;
-  const geometry = route.geometry;
+  const geometry = (route as { geometry?: unknown }).geometry;
   if (
     metadata.geometryKind === 'none' ||
     metadata.geometryStatus === 'unavailable' ||
@@ -35,10 +37,7 @@ export function mapLinePoints(route: RoutePlan): Coordinate[] {
     return [];
   }
   if (isRenderableGeometry(geometry)) return geometry;
-  const pointPreview = route.points.map(({ latitude, longitude }) => ({
-    latitude,
-    longitude,
-  }));
+  const pointPreview = mapDisplayPoints(route);
   return isRenderableGeometry(pointPreview) ? pointPreview : [];
 }
 
@@ -50,47 +49,75 @@ export function mapLineModel(route: RoutePlan, requestedStatus?: MapGeometryStat
     lineStyle:
       linePoints.length < 2 ? 'none' : roadMatched ? 'solid' : 'dashed',
     roadMatched,
-    status: renderMapGeometryStatus(route, requestedStatus),
+    status: renderMapGeometryStatus(route, requestedStatus, linePoints),
   };
 }
 
 /**
- * The rendered route owns the geometry truth. A pending status can describe a
- * request before geometry exists, but a stale "matched" status must never
- * make a waypoint trace look like road-following geometry.
+ * Legacy non-rendering status adapter for callers that predate canonical
+ * geometry metadata. MapPreview must use mapLineModel instead; this helper is
+ * never consulted for line style or viewport geometry.
+ * @deprecated Use mapLineModel.status for renderer state.
  */
 export function mapGeometryStatus(route: RoutePlan, requestedStatus?: MapGeometryStatus): MapGeometryStatus {
-  const metadata = route as RouteWithGeometryMetadata;
-  const status = renderMapGeometryStatus(route, requestedStatus);
-  // Legacy callers used `pilot` as a request to display any supplied geometry.
-  // Keep that compatibility at this helper boundary; mapLineModel uses the
-  // strict renderer status above so legacy coordinates can never look solid.
-  if (
-    status === 'pilot' &&
-    requestedStatus === 'pilot' &&
-    metadata.geometryKind === undefined &&
-    metadata.geometryStatus === undefined &&
-    isRenderableGeometry(route.geometry)
-  ) {
-    return 'matched';
-  }
-  return status;
+  return legacyMapGeometryStatus(route, requestedStatus);
 }
 
 function renderMapGeometryStatus(
   route: RoutePlan,
   requestedStatus?: MapGeometryStatus,
-): MapGeometryStatus {
+  linePoints = mapLinePoints(route),
+): MapRenderStatus {
   const metadata = route as RouteWithGeometryMetadata;
   if (hasRoadMatchedGeometry(route)) return 'matched';
   if (metadata.geometryStatus === 'matching') return 'loading';
-  return requestedStatus === 'loading' && metadata.geometryStatus === undefined
-    ? 'loading'
-    : 'pilot';
+  if (metadata.geometryStatus === 'unavailable') return 'unavailable';
+  if (metadata.geometryStatus === 'draft') return 'draft';
+  if (requestedStatus === 'loading' && metadata.geometryStatus === undefined) return 'loading';
+  return linePoints.length < 2 ? 'empty' : 'pilot';
+}
+
+function legacyMapGeometryStatus(
+  route: RoutePlan,
+  requestedStatus?: MapGeometryStatus,
+): MapGeometryStatus {
+  const strictStatus = renderMapGeometryStatus(route, requestedStatus);
+  if (strictStatus === 'matched' || strictStatus === 'loading') return strictStatus;
+  const metadata = route as RouteWithGeometryMetadata;
+  if (
+    requestedStatus === 'pilot' &&
+    metadata.geometryKind === undefined &&
+    metadata.geometryStatus === undefined &&
+    isRenderableGeometry((route as { geometry?: unknown }).geometry)
+  ) {
+    return 'matched';
+  }
+  return requestedStatus === 'loading' ? 'loading' : 'pilot';
 }
 
 export function mapIsLoop(route: RoutePlan) {
-  return route.points.length > 1 && sameCoordinate(route.points[0], route.points[route.points.length - 1]);
+  const points = getRenderableRoutePoints(route);
+  return points.length > 1 && sameCoordinate(
+    points[0].routePoint,
+    points[points.length - 1].routePoint,
+  );
+}
+
+/** Valid route-point coordinates used only to position markers and fit the viewport. */
+export function mapDisplayPoints(route: RoutePlan): Coordinate[] {
+  return getRenderableRoutePoints(route).map(({ routePoint }) => ({
+    latitude: routePoint.latitude,
+    longitude: routePoint.longitude,
+  }));
+}
+
+/** Prefer rendered line geometry; otherwise fit validated markers without drawing a line. */
+export function mapViewportPoints(
+  route: RoutePlan,
+  linePoints?: readonly unknown[],
+): Coordinate[] {
+  const safeLinePoints = validDisplayCoordinates(linePoints ?? mapLinePoints(route));
+  return safeLinePoints.length >= 2 ? safeLinePoints : mapDisplayPoints(route);
 }
 
 /**
@@ -99,7 +126,8 @@ export function mapIsLoop(route: RoutePlan) {
  * a fallback; cumulative distance is the source of truth when available.
  */
 export function mapSegmentIndexForLine(route: RoutePlan, lineIndex: number, linePointCount: number) {
-  const maximum = Math.max(0, route.points.length - 2);
+  const routePoints = getRenderableRoutePoints(route).map(({ routePoint }) => routePoint);
+  const maximum = Math.max(0, routePoints.length - 2);
   if (!maximum) return 0;
   const safeLinePointCount = Number.isFinite(linePointCount)
     ? Math.max(0, Math.trunc(linePointCount))
@@ -114,7 +142,7 @@ export function mapSegmentIndexForLine(route: RoutePlan, lineIndex: number, line
     const end = Number(distances[safeLineIndex + 1] ?? start);
     const midpoint = (start + end) / 2;
     for (let segmentIndex = 0; segmentIndex < maximum; segmentIndex += 1) {
-      const segmentEnd = Number(route.points[segmentIndex + 1]?.distanceKm);
+      const segmentEnd = Number(routePoints[segmentIndex + 1]?.distanceKm);
       if (Number.isFinite(segmentEnd) && midpoint <= segmentEnd) return segmentIndex;
     }
     return maximum;
@@ -138,24 +166,42 @@ export function mapMarkerPoints(
   roadMatched = hasRoadMatchedGeometry(route),
   maxMarkers = 8,
 ): MapMarker[] {
-  const isLoop = mapIsLoop(route);
-  const candidates = isLoop ? route.points.slice(0, -1) : route.points;
+  const routePoints = getRenderableRoutePoints(route);
+  const isLoop = routePoints.length > 1 && sameCoordinate(
+    routePoints[0].routePoint,
+    routePoints[routePoints.length - 1].routePoint,
+  );
+  const candidates = isLoop ? routePoints.slice(0, -1) : routePoints;
   if (!candidates.length) return [];
   const markerLimit = Number.isFinite(maxMarkers) ? Math.max(0, Math.floor(maxMarkers)) : 8;
   const indexes = sampleIndexes(candidates.length, markerLimit);
-  return indexes.map((sourceIndex, markerIndex) => {
-    const routePoint = candidates[sourceIndex];
+  const safeLinePoints = validDisplayCoordinates(linePoints);
+  const useRoadGeometry = roadMatched && safeLinePoints.length >= 2;
+  return indexes.map((candidateIndex, markerIndex) => {
+    const candidate = candidates[candidateIndex];
+    const routePoint = candidate.routePoint;
     const isStart = markerIndex === 0;
     const isEnd = !isLoop && markerIndex === indexes.length - 1;
-    const coordinate = roadMatched
+    const coordinate = useRoadGeometry
       ? isStart
-        ? linePoints[0] ?? routePoint
+        ? safeLinePoints[0] ?? routePoint
         : isEnd
-          ? linePoints[linePoints.length - 1] ?? routePoint
+          ? safeLinePoints[safeLinePoints.length - 1] ?? routePoint
           : routePoint
       : routePoint;
-    return { coordinate, routePoint, sourceIndex, isStart, isEnd, isLoop };
+    return {
+      coordinate,
+      routePoint,
+      sourceIndex: candidate.sourceIndex,
+      isStart,
+      isEnd,
+      isLoop,
+    };
   });
+}
+
+export function mapRoadKindAt(route: RoutePlan, pointIndex: number): RoadKind {
+  return getRenderableRoutePoints(route).map(({ routePoint }) => routePoint)[pointIndex]?.suitability.kind ?? 'unknown';
 }
 
 function hasRoadMatchedGeometry(route: RoutePlan) {
@@ -163,7 +209,7 @@ function hasRoadMatchedGeometry(route: RoutePlan) {
   return (
     metadata.geometryKind === 'road_matched' &&
     metadata.geometryStatus === 'ready' &&
-    isRenderableGeometry(route.geometry)
+    isRenderableGeometry((route as { geometry?: unknown }).geometry)
   );
 }
 
@@ -171,27 +217,47 @@ function isPointOnlyPreview(
   route: RoutePlan,
   metadata: RouteWithGeometryMetadata,
 ) {
-  if (route.geometry?.length) return false;
+  const geometry = (route as { geometry?: unknown }).geometry;
+  if (Array.isArray(geometry) && geometry.length) return false;
   if (metadata.geometryKind === 'road_matched' || metadata.geometryKind === 'none') return false;
   if (metadata.geometryKind === 'recorded_trace' || metadata.geometryKind === 'waypoint_trace') return true;
-  const source = route.source.toLowerCase();
+  const source = typeof route.source === 'string' ? route.source.toLowerCase() : '';
   return source.includes('gpx') || source.includes('draw');
 }
 
-function isRenderableGeometry(geometry: Coordinate[] | undefined): geometry is Coordinate[] {
+function isRenderableGeometry(geometry: unknown): geometry is Coordinate[] {
   return Boolean(
     Array.isArray(geometry) &&
       geometry.length >= 2 &&
-      geometry.every(
-        (point) =>
-          Number.isFinite(point.latitude) &&
-          Number.isFinite(point.longitude) &&
-          point.latitude >= -90 &&
-          point.latitude <= 90 &&
-          point.longitude >= -180 &&
-          point.longitude <= 180,
-      ),
+      geometry.every(hasFiniteCoordinate),
   );
+}
+
+function getRenderableRoutePoints(
+  route: RoutePlan,
+): Array<{ routePoint: RoutePoint; sourceIndex: number }> {
+  const points = (route as { points?: unknown }).points;
+  if (!Array.isArray(points)) return [];
+  return points.flatMap((value, sourceIndex) =>
+    isRenderableRoutePoint(value) ? [{ routePoint: value, sourceIndex }] : [],
+  );
+}
+
+function isRenderableRoutePoint(value: unknown): value is RoutePoint {
+  if (!hasFiniteCoordinate(value) || typeof value !== 'object' || value === null) return false;
+  const point = value as Partial<RoutePoint> & {
+    suitability?: { kind?: unknown };
+  };
+  return (
+    typeof point.name === 'string' &&
+    point.name.trim().length > 0 &&
+    Number.isFinite(point.distanceKm) &&
+    isRoadKind(point.suitability?.kind)
+  );
+}
+
+function isRoadKind(value: unknown): value is RoadKind {
+  return value === 'dedicated' || value === 'mixed' || value === 'restricted' || value === 'unknown';
 }
 
 function sampleIndexes(length: number, maximum: number) {
