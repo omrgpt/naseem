@@ -30,6 +30,37 @@ export function parseActivities(raw: string | null): ActivityDraft[] {
   }
 }
 
+/** A draft stays local and recoverable until the rider saves or discards it. */
+export function isRecoverableActivity(
+  activity: Pick<ActivityDraft, "completionState">,
+) {
+  return (
+    activity.completionState === "draft" ||
+    activity.completionState === "save_failed"
+  );
+}
+
+export function serializePendingActivity(activity: ActivityDraft) {
+  return serializeActivities([activity]);
+}
+
+export function parsePendingActivity(raw: string | null): ActivityDraft | null {
+  return parseActivities(raw).find(isRecoverableActivity) ?? null;
+}
+
+/** Return a defensive copy so opening a saved ride cannot mutate its history. */
+export function openSavedActivity(
+  activities: readonly ActivityDraft[],
+  id: string,
+): ActivityDraft | null {
+  const activity = activities.find(
+    (candidate) => candidate.id === id && candidate.completionState === "saved",
+  );
+  return activity ? clone(activity) : null;
+}
+
+export const findSavedActivity = openSavedActivity;
+
 export function upsertActivity(
   activities: readonly ActivityDraft[],
   activity: ActivityDraft,
@@ -69,12 +100,19 @@ function isActivityDraft(value: unknown): value is ActivityDraft {
     !Number.isFinite(value.gaps)
   )
     return false;
-  return (
+  const validMatchQuality =
     value.matchQuality === "high" ||
     value.matchQuality === "medium" ||
     value.matchQuality === "low" ||
-    value.matchQuality === "unknown"
-  );
+    value.matchQuality === "unknown";
+  const validCompletionState =
+    value.completionState === "draft" ||
+    value.completionState === "saved" ||
+    value.completionState === "save_failed" ||
+    value.completionState === "discarded";
+  const validExportState =
+    value.exportState === "not_exported" || value.exportState === "exported";
+  return validMatchQuality && validCompletionState && validExportState;
 }
 
 function isFiniteDate(value: string) {

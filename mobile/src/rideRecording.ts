@@ -8,6 +8,172 @@ import type {
   RouteRecord,
 } from "./domain";
 
+export type LiveRideStateName =
+  | "no-route"
+  | "ready"
+  | "explanation"
+  | "requesting"
+  | "active"
+  | "denied"
+  | "unavailable"
+  | "ending"
+  | "completed-draft"
+  | "save-failed"
+  | "saved"
+  | "discarded"
+  | "exported";
+
+export type LiveRideStateEvent =
+  | "explain"
+  | "request"
+  | "permission-granted"
+  | "permission-denied"
+  | "location-unavailable"
+  | "location-recovered"
+  | "end-requested"
+  | "completed"
+  | "save-failed"
+  | "save-retry"
+  | "saved"
+  | "discarded"
+  | "exported";
+
+export type LiveRideLocationFailure = "denied" | "unavailable";
+
+export type RecordingOnlyLabels = Readonly<{
+  start: string;
+  active: string;
+  end: string;
+}>;
+
+export type RecordingControlLabels = Readonly<{
+  pause: string;
+  resume: string;
+  continue: string;
+}>;
+
+export type BrowserDownloadEnvironment = {
+  Blob?: new (parts: unknown[], options?: { type?: string }) => unknown;
+  URL?: {
+    createObjectURL: (value: unknown) => string;
+    revokeObjectURL?: (value: string) => void;
+  };
+  document?: {
+    createElement: (tagName: "a") => {
+      href: string;
+      download: string;
+      click: () => void;
+    };
+    body?: {
+      appendChild: (element: unknown) => void;
+      removeChild: (element: unknown) => void;
+    };
+  };
+};
+
+/**
+ * Keep the user-visible ride lifecycle finite and explicit. The hook owns the
+ * side effects; this reducer-like helper keeps transitions testable without
+ * loading React Native or Expo in the Node test runner.
+ */
+export function transitionLiveRideState(
+  state: LiveRideStateName | string,
+  event: LiveRideStateEvent,
+): LiveRideStateName {
+  switch (event) {
+    case "explain":
+      return "explanation";
+    case "request":
+      return "requesting";
+    case "permission-granted":
+    case "location-recovered":
+      return "active";
+    case "permission-denied":
+      return "denied";
+    case "location-unavailable":
+      return "unavailable";
+    case "end-requested":
+      return "ending";
+    case "completed":
+      return "completed-draft";
+    case "save-failed":
+      return "save-failed";
+    case "save-retry":
+      return "completed-draft";
+    case "saved":
+      return "saved";
+    case "discarded":
+      return "discarded";
+    case "exported":
+      return "exported";
+    default:
+      return state as LiveRideStateName;
+  }
+}
+
+export function classifyLocationFailure(
+  error: unknown,
+  _platform: string = "native",
+): LiveRideLocationFailure {
+  const record =
+    error && typeof error === "object"
+      ? (error as { code?: unknown; message?: unknown })
+      : undefined;
+  const code = String(record?.code ?? "").toLowerCase();
+  const message = String(record?.message ?? error ?? "").toLowerCase();
+  if (
+    code === "1" ||
+    code.includes("permission_denied") ||
+    /permission|denied|not allowed|authorization/.test(message)
+  )
+    return "denied";
+  return "unavailable";
+}
+
+export function isBrowserLocationAvailable(environment?: {
+  geolocation?: unknown;
+}) {
+  if (environment) return Boolean(environment.geolocation);
+  return typeof navigator !== "undefined" && Boolean(navigator.geolocation);
+}
+
+export function recordingOnlyLabels(arabic = false): RecordingOnlyLabels {
+  return arabic
+    ? { start: "ابدأ التسجيل", active: "التسجيل نشط", end: "إنهاء التسجيل" }
+    : { start: "Start recording", active: "Recording active", end: "End recording" };
+}
+
+export function recordingControlLabels(arabic = false): RecordingControlLabels {
+  return arabic
+    ? {
+        pause: "إيقاف التسجيل مؤقتاً",
+        resume: "استئناف التسجيل",
+        continue: "متابعة التسجيل",
+      }
+    : {
+        pause: "Pause recording",
+        resume: "Resume recording",
+        continue: "Continue recording",
+      };
+}
+
+export type LiveRideCompletionState = Exclude<
+  LiveRideStateName,
+  "no-route" | "ready" | "explanation" | "requesting" | "active" | "denied" | "unavailable" | "ending"
+>;
+
+export function completionStateForDraft(
+  draft: Pick<ActivityDraft, "completionState" | "exportState">,
+): LiveRideCompletionState {
+  if (draft.exportState === "exported") return "exported";
+  if (draft.completionState === "save_failed") return "save-failed";
+  if (draft.completionState === "saved") return "saved";
+  if (draft.completionState === "discarded") return "discarded";
+  return "completed-draft";
+}
+
+export const activityCompletionState = completionStateForDraft;
+
 export type CompletionDraftInput = {
   endedAt: string | Date;
   samples?: RecordedSample[];
@@ -103,12 +269,46 @@ export function markActivitySaved(draft: ActivityDraft): ActivityDraft {
 export function markActivitySaveFailed(draft: ActivityDraft): ActivityDraft {
   return { ...clone(draft), completionState: "save_failed" };
 }
+export function markActivitySaveRetry(draft: ActivityDraft): ActivityDraft {
+  return { ...clone(draft), completionState: "draft" };
+}
 export function markActivityDiscarded(draft: ActivityDraft): ActivityDraft {
   return { ...clone(draft), completionState: "discarded" };
 }
 export function markActivityExported(draft: ActivityDraft): ActivityDraft {
   return { ...clone(draft), exportState: "exported" };
 }
+
+export function downloadActivityDraft(
+  draft: ActivityDraft,
+  environment: BrowserDownloadEnvironment = browserDownloadEnvironment(),
+) {
+  if (
+    !environment.Blob ||
+    !environment.URL?.createObjectURL ||
+    !environment.document
+  )
+    return false;
+
+  const payload = JSON.stringify(clone(draft), null, 2);
+  const blob = new environment.Blob([payload], { type: "application/json" });
+  const href = environment.URL.createObjectURL(blob);
+  const link = environment.document.createElement("a");
+  link.href = href;
+  link.download = `ride-${safeFilePart(draft.id)}.json`;
+  try {
+    environment.document.body?.appendChild(link);
+    link.click();
+    environment.document.body?.removeChild(link);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    environment.URL.revokeObjectURL?.(href);
+  }
+}
+
+export const exportActivityDraft = downloadActivityDraft;
 
 export function recordedDistanceMeters(samples: RecordedSample[]): number {
   let total = 0;
@@ -174,6 +374,39 @@ function toIso(value: string | Date) {
   if (!Number.isFinite(date.getTime()))
     throw new RangeError("Expected a valid ride instant.");
   return date.toISOString();
+}
+
+function browserDownloadEnvironment(): BrowserDownloadEnvironment {
+  return {
+    Blob:
+      typeof Blob === "undefined"
+        ? undefined
+        : (Blob as unknown as BrowserDownloadEnvironment["Blob"]),
+    URL:
+      typeof URL === "undefined" ||
+      typeof URL.createObjectURL !== "function"
+        ? undefined
+        : {
+            createObjectURL: (value) => URL.createObjectURL(value as Blob),
+            revokeObjectURL: (value) => URL.revokeObjectURL(value),
+          },
+    document:
+      typeof document === "undefined"
+        ? undefined
+        : {
+            createElement: (tagName) => document.createElement(tagName),
+            body: document.body
+              ? {
+                  appendChild: (element) => document.body.appendChild(element as Node),
+                  removeChild: (element) => document.body.removeChild(element as Node),
+                }
+              : undefined,
+          },
+  };
+}
+
+function safeFilePart(value: string) {
+  return value.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "") || "ride";
 }
 
 function clone<T>(value: T): T {
