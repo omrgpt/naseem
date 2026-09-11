@@ -74,6 +74,14 @@ function renderPrimitive(name: string, props: CapturedProps, platformOS = 'web')
   return { pressables: capturedPressables, views: capturedViews, modals: capturedModals };
 }
 
+function dispatchPressableKeyboard(pressable: CapturedProps, key: string) {
+  const event = { key, preventDefault: () => undefined, stopPropagation: () => undefined };
+  pressable.onKeyDown?.(event);
+  const spaceKey = key === ' ' || key === 'Spacebar';
+  const pressableOwnsKey = key === 'Enter' || (spaceKey && (pressable.role === 'button' || pressable.role === 'menuitem'));
+  if (pressableOwnsKey) pressable.onPress?.({ nativeEvent: { key } });
+}
+
 test('NoticeAlert exposes a labelled live alert/status region', () => {
   assert.match(noticeSource, /accessible/);
   assert.match(noticeSource, /accessibilityLabel=\{noticeAccessibilityLabel\}/);
@@ -112,6 +120,7 @@ test('AccessibleDialog exposes a labelled modal with focus containment and resto
   assert.match(source, /position:\s*['"]fixed['"]/);
   assert.match(source, /zIndex:\s*1000/);
   assert.match(source, /pointerEvents\s*[:=]\s*['"]auto['"]/);
+  assert.match(dialogSource, /tabIndex=\{-1\}/);
   assert.match(source, /inert/);
   assert.match(dialogSource, /triggerRef/);
   assert.match(dialogSource, /activeBeforeOpen/);
@@ -126,6 +135,8 @@ test('choice groups use native radio semantics and roving keyboard selection', (
   assert.match(choiceSource, /role="radio"/);
   assert.match(choiceSource, /aria-checked=\{selected\}/);
   assert.match(choiceSource, /choiceIndexForKey/);
+  assert.match(choiceSource, /isSpaceKey/);
+  assert.doesNotMatch(choiceSource, /key === ['"]Enter['"]/);
   assert.match(source, /ArrowRight/);
   assert.match(source, /ArrowLeft/);
   assert.match(source, /ArrowDown/);
@@ -142,6 +153,8 @@ test('switches expose checked state and toggle on keyboard activation', () => {
   assert.match(switchSource, /Space/);
   assert.match(switchSource, /Enter/);
   assert.match(switchSource, /onValueChange\(!value\)/);
+  assert.match(switchSource, /isSpaceKey/);
+  assert.doesNotMatch(switchSource, /key === ['"]Enter['"]/);
 });
 
 test('Pressable owns keyboard activation so primitive callbacks fire once', () => {
@@ -175,10 +188,33 @@ test('Pressable owns keyboard activation so primitive callbacks fire once', () =
     const pressable = rendered.pressables[0];
     for (const key of ['Enter', ' ']) {
       callbackCount = 0;
-      pressable.onKeyDown?.({ key, preventDefault: () => undefined });
-      pressable.onPress?.({ nativeEvent: { key } });
+      dispatchPressableKeyboard(pressable, key);
       assert.equal(callbackCount, 1, `${item.name} ${key === ' ' ? 'Space' : key} activation count`);
     }
+  }
+});
+
+test('radio and switch Space handlers activate exactly once while Enter stays Pressable-owned', () => {
+  const cases = [
+    {
+      name: 'AccessibleSwitch',
+      props: { label: 'Use current location', value: false, onValueChange: () => undefined },
+    },
+    {
+      name: 'AccessibleChoiceGroup',
+      props: { label: 'Departure', options: [{ value: 'morning', label: 'Morning' }], value: 'morning', onChange: () => undefined },
+    },
+  ];
+  for (const item of cases) {
+    let callbackCount = 0;
+    const props = { ...item.props } as CapturedProps;
+    if (item.name === 'AccessibleSwitch') props.onValueChange = () => { callbackCount += 1; };
+    if (item.name === 'AccessibleChoiceGroup') props.onChange = () => { callbackCount += 1; };
+    const pressable = renderPrimitive(item.name, props).pressables[0];
+    dispatchPressableKeyboard(pressable, ' ');
+    assert.equal(callbackCount, 1, `${item.name} Space activation count`);
+    dispatchPressableKeyboard(pressable, 'Enter');
+    assert.equal(callbackCount, 2, `${item.name} Enter activation count`);
   }
 });
 
@@ -193,8 +229,7 @@ test('state-changing navigation owns Enter and Space through its button press', 
   assert.equal(navButton.role, 'button');
   assert.equal(navButton['aria-pressed'], true);
   for (const key of ['Enter', ' ']) {
-    navButton.onKeyDown?.({ key, preventDefault: () => undefined });
-    navButton.onPress?.({ nativeEvent: { key } });
+    dispatchPressableKeyboard(navButton, key);
   }
   assert.equal(callbackCount, 2);
 });
@@ -212,6 +247,35 @@ test('dialog native escape hooks honor closeOnEscape at runtime', () => {
   modal.onRequestClose?.();
   dialog?.onAccessibilityEscape?.();
   assert.equal(callbackCount, 0);
+});
+
+test('dialog backdrop is non-focusable and cancel does not fall through to dismiss', () => {
+  let cancelCount = 0;
+  let dismissCount = 0;
+  const rendered = renderPrimitive('AccessibleDialog', {
+    visible: true,
+    title: 'Privacy',
+    cancelLabel: 'Cancel',
+    onCancel: () => { cancelCount += 1; },
+    onDismiss: () => { dismissCount += 1; },
+  });
+  assert.equal(rendered.pressables[0].tabIndex, -1);
+  assert.ok(rendered.pressables[0].style.some((style: CapturedProps) => style?.position === 'fixed'));
+  rendered.pressables.at(-1)?.onPress?.();
+  assert.equal(cancelCount, 1);
+  assert.equal(dismissCount, 0);
+});
+
+test('point lists keep listitems in the list and announcements outside its topology', () => {
+  const rendered = renderPrimitive('AccessiblePointList', {
+    label: 'Route points',
+    points: [{ id: 'start', label: 'Start' }],
+    selectedId: 'start',
+    onSelect: () => undefined,
+  });
+  assert.equal(rendered.views.filter((props) => props.role === 'list').length, 1);
+  assert.equal(rendered.views.filter((props) => props.role === 'listitem').length, 1);
+  assert.equal(rendered.views.filter((props) => props.role === 'status').length, 1);
 });
 
 test('navigation exposes current destinations as links and headings/landmarks support skip navigation', () => {
@@ -252,6 +316,9 @@ test('shared primitives make route points and markers keyboard-selectable', () =
   assert.match(pointSource, /accessibilityRole="list"/);
   assert.match(pointSource, /accessibilityRole="button"/);
   assert.match(pointSource, /aria-pressed/);
+  assert.match(pointSource, /role="listitem"/);
+  assert.match(pointSource, /pointListContainer/);
+  assert.match(pointSource, /<AccessibleLiveRegion message=\{announcement\}/);
   assert.match(pointSource, /selected/);
 });
 

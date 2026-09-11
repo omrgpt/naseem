@@ -22,6 +22,13 @@ Implemented only the Task 6 surface in `mobile/src/UiPatterns.tsx`, `mobile/src/
 - Moved progress updates to one stable visually-hidden polite live region while retaining the accessible progressbar value, avoiding duplicate announcements.
 - Added rendered-prop callback-count tests for Enter and Space, navigation activation, and native dialog escape gating.
 
+## Third fix round
+
+- Restored Space-only keyboard handlers for web radio and switch roles; Enter remains Pressable-owned, with runtime callback-count coverage proving one activation per key.
+- Made the web dialog backdrop programmatically non-focusable with `tabIndex={-1}` while retaining fixed viewport coverage, stacking, and pointer interception.
+- Corrected dialog Cancel fallback control flow so an explicit `onCancel` does not also invoke `onDismiss` when it returns `void`.
+- Restructured accessible route points as `list` → `listitem` → `button` and kept the selection live region outside the list topology.
+
 ## Verification
 
 - Initial-round TDD GREEN: `npm.cmd exec -- tsx --test src/UiPatterns.test.ts src/mapAccessibility.test.ts` — 12 passed.
@@ -30,3 +37,7 @@ Implemented only the Task 6 surface in `mobile/src/UiPatterns.tsx`, `mobile/src/
 - Package relevant-suite run: `npm.cmd test -- src/UiPatterns.test.ts src/mapAccessibility.test.ts` — 176 passed.
 - `git diff --check` — passed.
 - `npm.cmd run typecheck` — passed.
+- Third-round TDD RED: the new regression assertions reported 7 expected failures and 11 passes.
+- Third-round TDD GREEN: `npm.cmd exec -- tsx --test src/UiPatterns.test.ts src/mapAccessibility.test.ts` — 18 passed.
+- Final package relevant-suite run: `npm.cmd test -- src/UiPatterns.test.ts src/mapAccessibility.test.ts` — 194 passed.
+- Final `npm.cmd run typecheck` — passed.

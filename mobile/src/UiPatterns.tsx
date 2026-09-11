@@ -40,6 +40,10 @@ export type AccessiblePointItem = {
 
 const DEFAULT_PALETTE = LIGHT;
 
+export function isSpaceKey(key: unknown) {
+  return key === ' ' || key === 'Spacebar';
+}
+
 export function choiceIndexForKey(
   key: unknown,
   index: number,
@@ -174,7 +178,8 @@ export function AccessibleDialog({
   cancelRef.current = onCancel;
 
   const handleCancel = useCallback(() => {
-    cancelRef.current?.() ?? dismissRef.current();
+    if (cancelRef.current) cancelRef.current();
+    else dismissRef.current();
   }, []);
 
   const focusInitial = useCallback(() => {
@@ -262,6 +267,7 @@ export function AccessibleDialog({
     <Pressable
       accessible={false}
       pointerEvents="auto"
+      tabIndex={-1}
       onPress={(event: any) => {
         if (event?.target === event?.currentTarget) handleCancel();
       }}
@@ -348,7 +354,14 @@ export function AccessibleChoiceGroup({
   };
 
   const handleOptionKeyDown = (event: any, index: number) => {
-    // Pressable owns Enter/Space activation; this handler only moves the radio selection.
+    // Radio roles do not receive Space activation from RN Web's Pressable. Keep Space
+    // here, while leaving Enter to the Pressable's native button-like activation.
+    if (isSpaceKey(event?.key)) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      selectOption(index);
+      return;
+    }
     const nextIndex = choiceIndexForKey(event?.key, index, options.length, rtl, disabledIndexes);
     if (nextIndex === null) return;
     event.preventDefault?.();
@@ -426,6 +439,13 @@ export function AccessibleSwitch({
   disabled?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
+  const handleSpaceKeyDown = (event: any) => {
+    if (disabled || !isSpaceKey(event?.key)) return;
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    onValueChange(!value);
+  };
+
   return (
     <Pressable
       accessible
@@ -439,6 +459,7 @@ export function AccessibleSwitch({
       {...({ 'aria-keyshortcuts': 'Space Enter' } as any)}
       disabled={disabled}
       onPress={() => onValueChange(!value)}
+      {...({ onKeyDown: handleSpaceKeyDown } as any)}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [styles.switch, { backgroundColor: palette.panel, borderColor: palette.line, opacity: disabled ? 0.48 : pressed ? 0.78 : 1 }, focused && styles.focusRing, rtl && styles.rtl]}
@@ -653,36 +674,43 @@ export function AccessiblePointList({
   const selectedPoint = points.find((point) => point.id === selectedId);
   const announcement = selectedAnnouncement ?? (selectedPoint ? `${selectedPoint.label} selected` : '');
   return (
-    <View accessibilityRole="list" accessibilityLabel={label} role="list" style={styles.pointList}>
+    <View style={styles.pointListContainer}>
       <Text style={[styles.pointListLabel, { color: palette.ink }, rtl && styles.textRight]}>{label}</Text>
-      {points.map((point, index) => {
-        const selected = point.id === selectedId;
-        return (
-          <Pressable
-            key={point.id}
-            accessibilityRole="button"
-            accessibilityLabel={point.detail ? `${point.label}. ${point.detail}` : point.label}
-            accessibilityState={{ selected, disabled: point.disabled }}
-            role="button"
-            aria-pressed={selected}
-            aria-disabled={point.disabled || undefined}
-            {...({ 'aria-posinset': index + 1, 'aria-setsize': points.length } as any)}
-            disabled={point.disabled}
-            onPress={() => onSelect(point.id)}
-            onFocus={() => setFocusedPointId(point.id)}
-            onBlur={() => setFocusedPointId(null)}
-            style={({ pressed }) => [styles.pointListItem, { borderColor: palette.line, opacity: point.disabled ? 0.48 : pressed ? 0.78 : 1 }, selected && { backgroundColor: palette.accentSoft, borderColor: palette.accent }, focusedPointId === point.id && styles.focusRing, rtl && styles.rtl]}
-          >
-            <View style={[styles.pointListIndex, { backgroundColor: selected ? palette.accent : palette.ink }]}>
-              <Text style={[styles.pointListIndexText, { color: palette.bg }]}>{index + 1}</Text>
+      <View accessibilityRole="list" accessibilityLabel={label} role="list" style={styles.pointList}>
+        {points.map((point, index) => {
+          const selected = point.id === selectedId;
+          return (
+            <View
+              key={point.id}
+              role="listitem"
+              {...({ 'aria-posinset': index + 1, 'aria-setsize': points.length } as any)}
+              style={styles.pointListItemWrapper}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={point.detail ? `${point.label}. ${point.detail}` : point.label}
+                accessibilityState={{ selected, disabled: point.disabled }}
+                role="button"
+                aria-pressed={selected}
+                aria-disabled={point.disabled || undefined}
+                disabled={point.disabled}
+                onPress={() => onSelect(point.id)}
+                onFocus={() => setFocusedPointId(point.id)}
+                onBlur={() => setFocusedPointId(null)}
+                style={({ pressed }) => [styles.pointListItem, { borderColor: palette.line, opacity: point.disabled ? 0.48 : pressed ? 0.78 : 1 }, selected && { backgroundColor: palette.accentSoft, borderColor: palette.accent }, focusedPointId === point.id && styles.focusRing, rtl && styles.rtl]}
+              >
+                <View style={[styles.pointListIndex, { backgroundColor: selected ? palette.accent : palette.ink }]}>
+                  <Text style={[styles.pointListIndexText, { color: palette.bg }]}>{index + 1}</Text>
+                </View>
+                <View style={styles.pointListCopy}>
+                  <Text style={[styles.pointListItemLabel, { color: palette.ink }, rtl && styles.textRight]}>{point.label}</Text>
+                  {point.detail ? <Text style={[styles.pointListItemDetail, { color: palette.muted }, rtl && styles.textRight]}>{point.detail}</Text> : null}
+                </View>
+              </Pressable>
             </View>
-            <View style={styles.pointListCopy}>
-              <Text style={[styles.pointListItemLabel, { color: palette.ink }, rtl && styles.textRight]}>{point.label}</Text>
-              {point.detail ? <Text style={[styles.pointListItemDetail, { color: palette.muted }, rtl && styles.textRight]}>{point.detail}</Text> : null}
-            </View>
-          </Pressable>
-        );
-      })}
+          );
+        })}
+      </View>
       <AccessibleLiveRegion message={announcement} />
     </View>
   );
@@ -905,7 +933,9 @@ const styles = StyleSheet.create({
   liveRegion: { position: 'absolute', top: 0, left: 0, width: 1, height: 1, overflow: 'hidden', opacity: 0 },
   mapMarker: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center', padding: 4, borderWidth: 1, borderRadius: 22 },
   mapMarkerText: { fontFamily: FONT_BOLD, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  pointListContainer: { gap: 8 },
   pointList: { gap: 8 },
+  pointListItemWrapper: { width: '100%' },
   pointListLabel: { fontFamily: FONT_BOLD, fontSize: 14, lineHeight: 21, fontWeight: '700' },
   pointListItem: { minHeight: 44, minWidth: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderRadius: 13 },
   pointListIndex: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
