@@ -254,3 +254,19 @@ export function text(t: Copy, key: string, fallback: string): string {
 }
 
 export const screenText = text;
+
+/** The Plan entry points intentionally have different destinations. */
+export type PlanActionId = "first-route" | "samples" | "endpoints";
+export type PlanActionTarget =
+  | "beginner-guide"
+  | "sample-chooser"
+  | "endpoint-builder";
+
+export const PLAN_ACTIONS: ReadonlyArray<{
+  id: PlanActionId;
+  target: PlanActionTarget;
+}> = [
+  { id: "first-route", target: "beginner-guide" },
+  { id: "samples", target: "sample-chooser" },
+  { id: "endpoints", target: "endpoint-builder" },
+];

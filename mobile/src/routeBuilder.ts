@@ -1,5 +1,6 @@
 import type { Coordinate, RoutePlan, RoutePoint } from './domain';
 import { departureInstant } from './routeTime';
+import type { BuilderRouteState, PlannerPoint } from './screenTypes';
 
 const unknownRoad = (source: string) => ({ kind: 'unknown' as const, label: 'Unknown road data', evidence: 'This route has no validated infrastructure evidence yet.', evidenceAr: 'لا تتوفر أدلة موثقة عن البنية التحتية لهذا المسار بعد.', source, confidence: 'low' as const });
 export const ROUTE_LIMITS = { maxDistanceKm: 160, maxLegKm: 35, maxPoints: 2_000 } as const;
@@ -7,8 +8,225 @@ const BAHRAIN_BOUNDS = { minLatitude: 25.5, maxLatitude: 26.5, minLongitude: 50.
 
 export type RouteValidationError = 'tooFewPoints' | 'outsideCoverage' | 'tooLong' | 'legTooLong' | null;
 
+export type PlannerField = 'start' | 'destination';
+export type PlannerInputState = {
+  startText: string;
+  destinationText: string;
+  start: PlannerPoint | null;
+  destination: PlannerPoint | null;
+  activeField: PlannerField | null;
+  suggestionsOpen: PlannerField | null;
+};
+
+export type PlannerValidationError =
+  | 'emptyStart'
+  | 'emptyDestination'
+  | 'invalidStart'
+  | 'invalidDestination'
+  | 'uncommittedStart'
+  | 'uncommittedDestination'
+  | 'sameEndpoints'
+  | null;
+
+export function createPlannerInputState(
+  start: PlannerPoint | null = null,
+  destination: PlannerPoint | null = null,
+): PlannerInputState {
+  return {
+    startText: start?.name ?? '',
+    destinationText: destination?.name ?? '',
+    start,
+    destination,
+    activeField: null,
+    suggestionsOpen: null,
+  };
+}
+
+export function updatePlannerTextState(
+  state: PlannerInputState,
+  field: PlannerField,
+  value: string,
+): PlannerInputState {
+  return field === 'start'
+    ? { ...state, startText: value, activeField: field, suggestionsOpen: field }
+    : { ...state, destinationText: value, activeField: field, suggestionsOpen: field };
+}
+
+export function commitPlannerPoint(
+  state: PlannerInputState,
+  field: PlannerField,
+  point: PlannerPoint,
+): PlannerInputState {
+  const nextStart = field === 'start' ? { ...point } : state.start;
+  const nextDestination = field === 'destination' ? { ...point } : state.destination;
+  return {
+    ...state,
+    start: nextStart,
+    destination: nextDestination,
+    startText: field === 'start' ? point.name : state.startText,
+    destinationText: field === 'destination' ? point.name : state.destinationText,
+    activeField: field === 'start' && !nextDestination ? 'destination' : null,
+    suggestionsOpen: null,
+  };
+}
+
+export function clearPlannerPointState(
+  state: PlannerInputState,
+  field: PlannerField,
+): PlannerInputState {
+  return field === 'start'
+    ? { ...state, start: null, startText: '', activeField: field, suggestionsOpen: field }
+    : { ...state, destination: null, destinationText: '', activeField: field, suggestionsOpen: field };
+}
+
+export function plannerEndpointIsCommitted(
+  state: PlannerInputState,
+  field: PlannerField,
+): boolean {
+  const point = field === 'start' ? state.start : state.destination;
+  const text = field === 'start' ? state.startText : state.destinationText;
+  if (!point) return false;
+  const trimmed = text.trim();
+  return trimmed === point.name.trim() || trimmed === point.nameAr?.trim();
+}
+
+export function validatePlannerEndpoints(
+  start: PlannerPoint | null | undefined,
+  destination: PlannerPoint | null | undefined,
+): PlannerValidationError {
+  if (!start) return 'emptyStart';
+  if (!destination) return 'emptyDestination';
+  if (!isValidCoordinate(start)) return 'invalidStart';
+  if (!isValidCoordinate(destination)) return 'invalidDestination';
+  if (start.latitude === destination.latitude && start.longitude === destination.longitude) {
+    return 'sameEndpoints';
+  }
+  return null;
+}
+
+export function validatePlannerInput(state: PlannerInputState): PlannerValidationError {
+  const endpointError = validatePlannerEndpoints(state.start, state.destination);
+  if (endpointError) return endpointError;
+  if (!plannerEndpointIsCommitted(state, 'start')) return 'uncommittedStart';
+  if (!plannerEndpointIsCommitted(state, 'destination')) return 'uncommittedDestination';
+  return null;
+}
+
+export function plannerInputCanMatch(state: PlannerInputState): boolean {
+  return validatePlannerInput(state) === null;
+}
+
+const plannerValidationMessages = {
+  en: {
+    emptyStart: 'Choose a Start before finding a route.',
+    emptyDestination: 'Choose a Destination before finding a route.',
+    invalidStart: 'Choose a valid Start before finding a route.',
+    invalidDestination: 'Choose a valid Destination before finding a route.',
+    uncommittedStart: 'Choose the typed Start from the suggestions or map before finding a route.',
+    uncommittedDestination: 'Choose the typed Destination from the suggestions or map before finding a route.',
+    sameEndpoints: 'Choose a different Destination from Start.',
+  },
+  ar: {
+    emptyStart: 'اختر نقطة بداية قبل العثور على المسار.',
+    emptyDestination: 'اختر وجهة قبل العثور على المسار.',
+    invalidStart: 'اختر نقطة بداية صحيحة قبل العثور على المسار.',
+    invalidDestination: 'اختر وجهة صحيحة قبل العثور على المسار.',
+    uncommittedStart: 'اختر البداية المكتوبة من الاقتراحات أو الخريطة قبل العثور على المسار.',
+    uncommittedDestination: 'اختر الوجهة المكتوبة من الاقتراحات أو الخريطة قبل العثور على المسار.',
+    sameEndpoints: 'اختر وجهة مختلفة عن البداية.',
+  },
+} as const;
+
+export function plannerValidationMessage(
+  error: Exclude<PlannerValidationError, null> | null,
+  language: 'en' | 'ar' = 'en',
+): string {
+  return error ? plannerValidationMessages[language][error] : '';
+}
+
+export function builderStateAfterEdit(state: BuilderRouteState): BuilderRouteState {
+  return {
+    ...state,
+    status: state.start || state.destination ? 'start-selected' : 'empty',
+    route: null,
+    error: undefined,
+  };
+}
+
+export function builderStateForRetry(state: BuilderRouteState): BuilderRouteState {
+  const editable = builderStateAfterEdit(state);
+  return editable.start && editable.destination
+    ? { ...editable, status: 'matching' }
+    : editable;
+}
+
+export function selectSampleRoute(
+  routes: readonly RoutePlan[],
+  routeId: string,
+): RoutePlan | null {
+  return routes.find((route) => route.id === routeId) ?? null;
+}
+
+export type ManualSketchDecision = 'use' | 'save' | 'edit' | 'discard';
+export type ManualSketchResult = {
+  status: 'editing' | 'done';
+  points: Coordinate[];
+  redo: Coordinate[];
+  route: RoutePlan | null;
+  decision: 'pending' | ManualSketchDecision;
+};
+
+export function createManualSketchResult(
+  coordinates: Coordinate[],
+  id: string,
+  name: string,
+  source = 'Drawn on device',
+): ManualSketchResult {
+  const points = normalizeCoordinates(coordinates);
+  return {
+    status: points.length >= 2 ? 'done' : 'editing',
+    points,
+    redo: [],
+    route: points.length ? draftRouteFromCoordinates(id, name, points, source) : null,
+    decision: 'pending',
+  };
+}
+
+export function applyManualSketchDecision(
+  result: ManualSketchResult,
+  decision: ManualSketchDecision,
+): ManualSketchResult {
+  if (decision === 'discard') {
+    return { ...result, status: 'editing', points: [], redo: [], route: null, decision };
+  }
+  if (decision === 'edit') return { ...result, status: 'editing', decision };
+  return { ...result, status: 'done', decision };
+}
+
+export type LoopGenerationFailure = 'invalidTarget' | 'outsideCoverage' | 'matchingFailed' | 'unknown';
+export type LoopGenerationRecovery = {
+  failure: LoopGenerationFailure;
+  start: PlannerPoint | null;
+  preservesStart: boolean;
+  retryable: boolean;
+  recoveryActions: readonly ('retry' | 'edit-start')[];
+};
+
+export function recoverLoopGenerationFailure(
+  start: PlannerPoint | null,
+  failure: LoopGenerationFailure,
+): LoopGenerationRecovery {
+  return {
+    failure,
+    start,
+    preservesStart: Boolean(start),
+    retryable: Boolean(start),
+    recoveryActions: start ? ['retry', 'edit-start'] : ['edit-start'],
+  };
+}
+
 export function validateRouteCoordinates(coordinates: Coordinate[]): RouteValidationError {
-  const valid = coordinates.filter(isValidCoordinate);
+  const valid = normalizeCoordinates(coordinates);
   if (valid.length < 2) return 'tooFewPoints';
   if (valid.some((coordinate) => !isBahrainCoordinate(coordinate))) return 'outsideCoverage';
   if (valid.length > ROUTE_LIMITS.maxPoints) return 'tooLong';
@@ -23,8 +241,12 @@ export function validateRouteCoordinates(coordinates: Coordinate[]): RouteValida
 }
 
 export function routeFromCoordinates(id: string, name: string, coordinates: Coordinate[], source = 'GPX import'): RoutePlan | null {
-  const validCoordinates = coordinates.filter(isValidCoordinate).filter((coordinate, index, all) => index === 0 || coordinate.latitude !== all[index - 1].latitude || coordinate.longitude !== all[index - 1].longitude);
+  const validCoordinates = normalizeCoordinates(coordinates);
   if (validateRouteCoordinates(validCoordinates)) return null;
+  return buildRoutePlan(id, name, validCoordinates, source);
+}
+
+function buildRoutePlan(id: string, name: string, validCoordinates: Coordinate[], source: string): RoutePlan {
   const points: RoutePoint[] = [];
   let distanceKm = 0;
   validCoordinates.forEach((coordinate, index) => {
@@ -35,26 +257,12 @@ export function routeFromCoordinates(id: string, name: string, coordinates: Coor
   return { id, name, nameAr: name, source, distanceKm: Number(distanceKm.toFixed(1)), departureAt: departureInstant('tomorrow'), departureLabel: '', arrivalLabel: '', durationMinutes: 0, recommendation: 'Route evidence is unknown until the route service validates the geometry.', windSummary: { tailwindPercent: 0, headwindPercent: 0, crosswindPercent: 0 }, segments: [], points };
 }
 
-/** Build a visible draft even after the first tap; saving still requires two
- * points and runs the normal Bahrain/length validation. */
+/** Build a visible draft from every valid point; manual sketches stay
+ * preview-only and do not claim road coverage or navigation readiness. */
 export function draftRouteFromCoordinates(id: string, name: string, coordinates: Coordinate[], source = 'Drawn on device'): RoutePlan | null {
-  const validCoordinates = coordinates.filter(isValidCoordinate).filter((coordinate, index, all) => index === 0 || coordinate.latitude !== all[index - 1].latitude || coordinate.longitude !== all[index - 1].longitude);
+  const validCoordinates = normalizeCoordinates(coordinates);
   if (!validCoordinates.length) return null;
-  return routeFromCoordinates(id, name, validCoordinates, source) ?? {
-    id,
-    name,
-    nameAr: name,
-    source,
-    distanceKm: 0,
-    departureAt: departureInstant('tomorrow'),
-    departureLabel: '',
-    arrivalLabel: '',
-    durationMinutes: 0,
-    recommendation: 'Route evidence is unknown until the route service validates the geometry.',
-    windSummary: { tailwindPercent: 0, headwindPercent: 0, crosswindPercent: 0 },
-    segments: [],
-    points: [{ name: `Start · ${name}`, nameAr: `البداية · ${name}`, ...validCoordinates[0], distanceKm: 0, headingDegrees: 0, suitability: unknownRoad(source) }],
-  };
+  return buildRoutePlan(id, name, validCoordinates, source);
 }
 
 export function parseGpx(gpx: string) {
@@ -80,6 +288,9 @@ export function parseGpxDetailed(gpx: string) {
 }
 
 function isValidCoordinate(coordinate: Coordinate) { return Number.isFinite(coordinate.latitude) && Number.isFinite(coordinate.longitude) && coordinate.latitude >= -90 && coordinate.latitude <= 90 && coordinate.longitude >= -180 && coordinate.longitude <= 180; }
+function normalizeCoordinates(coordinates: Coordinate[]): Coordinate[] {
+  return coordinates.filter(isValidCoordinate).filter((coordinate, index, all) => index === 0 || coordinate.latitude !== all[index - 1].latitude || coordinate.longitude !== all[index - 1].longitude);
+}
 function isBahrainCoordinate(coordinate: Coordinate) { return coordinate.latitude >= BAHRAIN_BOUNDS.minLatitude && coordinate.latitude <= BAHRAIN_BOUNDS.maxLatitude && coordinate.longitude >= BAHRAIN_BOUNDS.minLongitude && coordinate.longitude <= BAHRAIN_BOUNDS.maxLongitude; }
 
 function bearingDegrees(from: Coordinate, to: Coordinate) { const dLon = (to.longitude - from.longitude) * Math.PI / 180; const lat1 = from.latitude * Math.PI / 180; const lat2 = to.latitude * Math.PI / 180; const y = Math.sin(dLon) * Math.cos(lat2); const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; }

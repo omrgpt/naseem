@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   NBH_CATALOG,
@@ -16,6 +19,12 @@ import {
   routeRecordFromPlan,
   routeRecordFromRevision,
 } from "./routeRepository";
+import { selectSampleRoute } from "./routeBuilder";
+
+const routesScreenSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "screens", "RoutesScreen.tsx"),
+  "utf8",
+);
 
 const catalogMetadata = {
   origin: "pilot" as const,
@@ -184,4 +193,48 @@ test("legacy NBH display names are normalized without changing personal route co
   assert.equal(legacy.name, "NBH Loop");
   assert.equal(legacy.nameAr, "حلقة ناصر بن حمد");
   assert.equal(legacy.analysis?.distanceKm, 21.8);
+});
+
+test("sample selection activates one stable catalog route by identity", () => {
+  assert.equal(selectSampleRoute([NBH_LOOP, NBH_LOOP], NBH_LOOP.id), NBH_LOOP);
+  assert.equal(selectSampleRoute([NBH_LOOP], "missing-route"), null);
+});
+
+test("Plan exposes three distinct actions instead of duplicate route-detail actions", () => {
+  assert.match(routesScreenSource, /Plan your first route/);
+  assert.match(routesScreenSource, /Browse sample routes/);
+  assert.match(routesScreenSource, /Build from Start and Destination/);
+  assert.equal(
+    (routesScreenSource.match(/Build from Start and Destination/g) ?? []).length,
+    1,
+  );
+  assert.equal(
+    (routesScreenSource.match(/onPress=\{family\.onReview\}/g) ?? []).length,
+    1,
+  );
+});
+
+test("catalog samples are presented as previews, not as rider-recorded tracks", () => {
+  assert.match(routesScreenSource, /routeOwnership\(canonical\) === "catalog"/);
+  assert.match(routesScreenSource, /Select this route/);
+});
+
+test("manual review exposes retained non-navigation decisions and loop recovery", () => {
+  for (const label of [
+    "Use as a non-navigation plan",
+    "Save locally",
+    "Edit",
+    "Discard",
+  ]) {
+    assert.match(routesScreenSource, new RegExp(label));
+  }
+  assert.match(routesScreenSource, /onRetryLoop|recoveryActions/);
+  assert.match(routesScreenSource, /formatNumber\(route\.points\.length/);
+  assert.match(
+    routesScreenSource,
+    /formatCoordinate\(pendingMapPoint\.coordinate\.latitude/,
+  );
+  assert.match(routesScreenSource, /rtl \? "تعديل" : "Edit"/);
+  assert.match(routesScreenSource, /rtl \? "تجاهل" : "Discard"/);
+  assert.doesNotMatch(routesScreenSource, /else openManual\(\)/);
 });

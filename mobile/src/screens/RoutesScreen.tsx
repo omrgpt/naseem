@@ -5,11 +5,17 @@ import { RouteLayerLegend } from "../RouteLayerLegend";
 import { NoticeAlert, StatusBadge } from "../UiPatterns";
 import type { Coordinate, RoutePlan } from "../domain";
 import {
+  plannerValidationMessage,
+  validatePlannerEndpoints,
+  type PlannerField,
+} from "../routeBuilder";
+import {
   asCanonicalRoute,
   routeChipFor,
   routeCollection,
   routeGeometryKind,
   routeGeometryStatus,
+  routeOwnership,
   text as tx,
   type BuilderRouteState,
   type CanonicalRouteView,
@@ -20,6 +26,7 @@ import {
   type RoadLabels,
   type ScreenBaseProps,
 } from "../screenTypes";
+import { PLAN_ACTIONS, type PlanActionId } from "./screenTypes";
 
 export type RoutesMapText = {
   native: string;
@@ -57,6 +64,8 @@ export type RoutesScreenProps = ScreenBaseProps & {
   importReviewFileName?: string;
   generatedReview: RoutePlan | null;
   routeMessage?: string;
+  loopGenerationFailed?: boolean;
+  manualReview?: RoutePlan | null;
   knownRouteFamily?: KnownRouteFamilyProps;
   onStartText: (value: string) => void;
   onDestinationText: (value: string) => void;
@@ -82,12 +91,17 @@ export type RoutesScreenProps = ScreenBaseProps & {
   onRedoManual: () => void;
   onClearManual: () => void;
   onDoneManual: () => void;
+  onUseManual?: () => void;
+  onSaveManual?: () => void;
+  onEditManual?: () => void;
+  onDiscardManual?: () => void;
   onRemoveManualPoint: (index: number) => void;
   onMoveManualPoint?: (index: number, direction: -1 | 1) => void;
   onUseImport: () => void;
   onCancelImport: () => void;
   onUseGenerated: () => void;
   onCancelGenerated: () => void;
+  onRetryLoop?: () => void;
   onSelect: (route: RoutePlan) => void;
 };
 
@@ -118,6 +132,8 @@ export function RoutesScreen({
   importReviewFileName,
   generatedReview,
   routeMessage,
+  loopGenerationFailed,
+  manualReview,
   knownRouteFamily,
   onStartText,
   onDestinationText,
@@ -140,18 +156,40 @@ export function RoutesScreen({
   onRedoManual,
   onClearManual,
   onDoneManual,
+  onUseManual,
+  onSaveManual,
+  onEditManual,
+  onDiscardManual,
   onRemoveManualPoint,
   onMoveManualPoint,
   onUseImport,
   onCancelImport,
   onUseGenerated,
   onCancelGenerated,
+  onRetryLoop,
   onSelect,
 }: RoutesScreenProps) {
   const [showSamples, setShowSamples] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
+  const [planAction, setPlanAction] = useState<PlanActionId | null>(null);
+  const [pendingMapPoint, setPendingMapPoint] = useState<{
+    field: PlannerField;
+    coordinate: Coordinate;
+  } | null>(null);
+  const [plannerValidation, setPlannerValidation] = useState<string | null>(
+    null,
+  );
+  const [completedManualRoute, setCompletedManualRoute] =
+    useState<RoutePlan | null>(null);
+  const [manualDecision, setManualDecision] = useState<
+    "pending" | "use" | "save" | "edit"
+  >("pending");
   const destinationRef = useRef<TextInput>(null);
   const preview = manualMode ? manualRoute : builderPreview;
+  const retainedManualRoute =
+    manualReview ??
+    completedManualRoute ??
+    (!manualMode && manualRoute && manualPoints.length >= 2 ? manualRoute : null);
   const mapStatus = manualMode
     ? "pilot"
     : builder.status === "matching"
@@ -173,7 +211,126 @@ export function RoutesScreen({
           ? tx(t, "routeUnavailable", "Road match unavailable")
           : tx(t, "chooseStartDestination", "Choose Start and Destination");
   const hasPlanningWork =
-    showBuilder || manualMode || builder.status !== "empty" || Boolean(preview);
+    showBuilder ||
+    manualMode ||
+    builder.status !== "empty" ||
+    Boolean(preview) ||
+    Boolean(retainedManualRoute);
+  const showFirstRouteGuide = planAction === "first-route" && !showBuilder;
+  const isEndpointCommitted = (field: PlannerField) => {
+    const point = field === "start" ? builder.start : builder.destination;
+    const text = field === "start" ? startText : destinationText;
+    const trimmed = text.trim();
+    return Boolean(
+      point &&
+        (trimmed === point.name.trim() || trimmed === point.nameAr?.trim()),
+    );
+  };
+  const suggestionsField =
+    activeField && !isEndpointCommitted(activeField) ? activeField : null;
+  const mapPickerField =
+    activeField ?? (builder.start ? ("destination" as const) : ("start" as const));
+  const formatCoordinate = (value: number) =>
+    formatNumber
+      ? formatNumber(value, {
+          minimumFractionDigits: 4,
+          maximumFractionDigits: 4,
+          useGrouping: false,
+        })
+      : value.toFixed(4);
+  const handleMapPress = (coordinate: Coordinate) => {
+    if (manualMode) {
+      onMapPress(coordinate);
+      return;
+    }
+    setPlannerValidation(null);
+    setPendingMapPoint({ field: mapPickerField, coordinate });
+  };
+  const confirmMapPoint = () => {
+    if (!pendingMapPoint) return;
+    const nextStart =
+      pendingMapPoint.field === "start"
+        ? { ...builder.start, ...pendingMapPoint.coordinate, name: startText || "Start" }
+        : builder.start;
+    const nextDestination =
+      pendingMapPoint.field === "destination"
+        ? {
+            ...builder.destination,
+            ...pendingMapPoint.coordinate,
+            name: destinationText || "Destination",
+          }
+        : builder.destination;
+    const validation = validatePlannerEndpoints(nextStart, nextDestination);
+    if (validation === "sameEndpoints") {
+      setPlannerValidation(plannerValidationMessage(validation, rtl ? "ar" : "en"));
+      return;
+    }
+    onMapPress(pendingMapPoint.coordinate);
+    setPendingMapPoint(null);
+    setPlannerValidation(null);
+  };
+  const handleSavedPoint = (
+    field: "start" | "destination",
+    point: PlannerPoint,
+  ) => {
+    const nextStart = field === "start" ? point : builder.start;
+    const nextDestination = field === "destination" ? point : builder.destination;
+    const validation = validatePlannerEndpoints(nextStart, nextDestination);
+    if (validation === "sameEndpoints") {
+      setPlannerValidation(plannerValidationMessage(validation, rtl ? "ar" : "en"));
+      return;
+    }
+    onUseSavedPoint(field, point);
+    setPlannerValidation(null);
+  };
+  const beginPlanAction = (action: PlanActionId) => {
+    setPlanAction(action);
+    setPlannerValidation(null);
+    setPendingMapPoint(null);
+    if (action === "first-route") {
+      setShowBuilder(false);
+      setShowSamples(false);
+      return;
+    }
+    if (action === "samples") {
+      setShowBuilder(false);
+      setShowSamples(true);
+      return;
+    }
+    setShowSamples(false);
+    setShowBuilder(true);
+    onFocusField("start");
+  };
+  const openManual = () => {
+    setCompletedManualRoute(null);
+    setManualDecision("pending");
+    onOpenManual();
+  };
+  const cancelManual = () => {
+    setCompletedManualRoute(null);
+    setManualDecision("pending");
+    onCancelManual();
+  };
+  const doneManual = () => {
+    if (manualRoute) setCompletedManualRoute(manualRoute);
+    setManualDecision("pending");
+    onDoneManual();
+  };
+  const decideManual = (decision: "use" | "save") => {
+    setManualDecision(decision);
+    if (decision === "use") onUseManual?.();
+    else onSaveManual?.();
+  };
+  const editManual = () => {
+    setManualDecision("edit");
+    onEditManual?.();
+  };
+  const discardManual = () => {
+    setCompletedManualRoute(null);
+    setManualDecision("pending");
+    if (onDiscardManual) onDiscardManual();
+    else onCancelManual();
+  };
   samples = samples.map((route) =>
     rtl && route.nameAr
       ? {
@@ -198,7 +355,7 @@ export function RoutesScreen({
               route={asCanonicalRoute(preview)!}
               fullScreen
               rtl={rtl}
-              onMapPress={onMapPress}
+              onMapPress={handleMapPress}
               roadLabels={roadLabels}
               mapText={{
                 ...mapText,
@@ -212,7 +369,7 @@ export function RoutesScreen({
               palette={palette}
               t={t}
               rtl={rtl}
-              onMapPress={onMapPress}
+              onMapPress={handleMapPress}
             />
           )}
         </View>
@@ -231,8 +388,8 @@ export function RoutesScreen({
             onUndo={onUndoManual}
             onRedo={onRedoManual}
             onClear={onClearManual}
-            onDone={onDoneManual}
-            onCancel={onCancelManual}
+            onDone={doneManual}
+            onCancel={cancelManual}
             onRemove={onRemoveManualPoint}
             onMove={onMoveManualPoint}
           />
@@ -273,17 +430,37 @@ export function RoutesScreen({
         />
       )}
 
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => setShowBuilder((current) => !current)}
-        style={styles.secondary}
-      >
-        <Text style={styles.secondaryText}>
-          {hasPlanningWork
-            ? tx(t, "hideMorePlanning", "Hide route builder")
-            : tx(t, "moreWaysToPlan", "More ways to plan")}
-        </Text>
-      </Pressable>
+      <PlanActionChooser
+        t={t}
+        rtl={rtl}
+        styles={styles}
+        activeAction={planAction}
+        onChoose={beginPlanAction}
+      />
+
+      {showFirstRouteGuide && (
+        <View style={styles.panel}>
+          <Text style={[styles.sectionTitle, rtl && styles.textRight]}>
+            {rtl ? "خطّط لمسارك الأول" : "Plan your first route"}
+          </Text>
+          <Text style={[styles.sectionCaption, rtl && styles.textRight]}>
+            {rtl
+              ? "اختر نقطة بداية ووجهة، ثم راجع مسار الطرق قبل الركوب."
+              : "Choose a Start and Destination, then review the road route before you ride."}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => beginPlanAction("endpoints")}
+            style={styles.primary}
+          >
+            <Text style={styles.primaryText}>
+              {rtl
+                ? "اختر البداية والوجهة"
+                : "Choose Start and Destination"}
+            </Text>
+          </Pressable>
+        </View>
+      )}
 
       {hasPlanningWork && (
         <View style={styles.panel}>
@@ -314,6 +491,9 @@ export function RoutesScreen({
             onFocus={() => onFocusField("start")}
             onChooseOnMap={() => onChooseOnMap("start")}
             onUseCurrent={() => onUseCurrentLocation("start")}
+            committedPoint={builder.start}
+            textIsCommitted={isEndpointCommitted("start")}
+            onClearPoint={() => onStartText("")}
           />
           <LocationField
             t={t}
@@ -333,14 +513,17 @@ export function RoutesScreen({
             onFocus={() => onFocusField("destination")}
             onChooseOnMap={() => onChooseOnMap("destination")}
             onUseCurrent={() => onUseCurrentLocation("destination")}
+            committedPoint={builder.destination}
+            textIsCommitted={isEndpointCommitted("destination")}
+            onClearPoint={() => onDestinationText("")}
           />
           <SavedPointChoices
             t={t}
             rtl={rtl}
             styles={styles}
             samples={[...samples, ...myRoutes]}
-            field={activeField}
-            onUse={onUseSavedPoint}
+            field={suggestionsField}
+            onUse={handleSavedPoint}
           />
           {!manualMode && (
             <View style={styles.statusLine} accessibilityLiveRegion="polite">
@@ -360,13 +543,57 @@ export function RoutesScreen({
         </View>
       )}
 
+      {pendingMapPoint && (
+        <View style={styles.panelAlt}>
+          <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
+            {rtl
+              ? `سيغيّر محدد الخريطة ${pendingMapPoint.field === "start" ? "البداية" : "الوجهة"} فقط`
+              : `Map picker changes ${pendingMapPoint.field === "start" ? "Start" : "Destination"} only`}
+          </Text>
+          <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+            {rtl ? "النقطة المحددة:" : "Selected point:"}{" "}
+            {formatCoordinate(pendingMapPoint.coordinate.latitude)}, {" "}
+            {formatCoordinate(pendingMapPoint.coordinate.longitude)}
+          </Text>
+          <View style={[styles.manualActions, rtl && styles.rowRtl]}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={confirmMapPoint}
+              style={styles.primary}
+            >
+              <Text style={styles.primaryText}>
+                {rtl
+                  ? `تأكيد ${pendingMapPoint.field === "start" ? "البداية" : "الوجهة"}`
+                  : `Confirm ${pendingMapPoint.field === "start" ? "Start" : "Destination"}`}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setPendingMapPoint(null)}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>{tx(t, "cancel", "Cancel")}</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+      {plannerValidation && (
+        <NoticeAlert
+          tone="warning"
+          title={tx(t, "routeUnavailable", "Route needs another point")}
+          description={plannerValidation}
+          palette={palette}
+          rtl={rtl}
+        />
+      )}
+
       {hasPlanningWork &&
         (preview ? (
           <MapPreview
             route={asCanonicalRoute(preview)!}
             fullScreen
             rtl={rtl}
-            onMapPress={onMapPress}
+            onMapPress={handleMapPress}
             roadLabels={roadLabels}
             mapText={{
               ...mapText,
@@ -382,7 +609,7 @@ export function RoutesScreen({
             palette={palette}
             t={t}
             rtl={rtl}
-            onMapPress={onMapPress}
+            onMapPress={handleMapPress}
           />
         ))}
 
@@ -495,6 +722,22 @@ export function RoutesScreen({
         />
       )}
 
+      {retainedManualRoute && (
+        <ManualSketchReviewPanel
+          route={retainedManualRoute}
+          t={t}
+          rtl={rtl}
+          styles={styles}
+          formatNumber={formatNumber}
+          distanceDisplay={distanceDisplay}
+          decision={manualDecision}
+          onUse={() => decideManual("use")}
+          onSave={() => decideManual("save")}
+          onEdit={editManual}
+          onDiscard={discardManual}
+        />
+      )}
+
       {hasPlanningWork &&
         (manualMode ? (
           <ManualPanel
@@ -506,8 +749,8 @@ export function RoutesScreen({
             onUndo={onUndoManual}
             onRedo={onRedoManual}
             onClear={onClearManual}
-            onDone={onDoneManual}
-            onCancel={onCancelManual}
+            onDone={doneManual}
+            onCancel={cancelManual}
             onRemove={onRemoveManualPoint}
             onMove={onMoveManualPoint}
           />
@@ -525,7 +768,7 @@ export function RoutesScreen({
             </Text>
             <Pressable
               accessibilityRole="button"
-              onPress={onOpenManual}
+              onPress={openManual}
               style={styles.secondary}
             >
               <Text style={styles.secondaryText}>
@@ -572,20 +815,52 @@ export function RoutesScreen({
           </View>
         ))}
 
+      {routeMessage &&
+        (loopGenerationFailed ||
+          (!generatedReview && Boolean(builder.start) && !importReview)) && (
+          <View>
+            <NoticeAlert
+              tone="warning"
+              title={tx(t, "generatedUnavailable", "Loop needs another try")}
+              description={routeMessage}
+              palette={palette}
+              rtl={rtl}
+            />
+            <View style={[styles.formActions, rtl && styles.rowRtl]}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onRetryLoop ?? onGenerate}
+                style={styles.primary}
+              >
+                <Text style={styles.primaryText}>
+                  {tx(t, "retry", "Try again")}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={onEditPoints}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryText}>
+                  {tx(t, "editPoints", "Edit Start")}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
       <View style={[styles.rowBetween, rtl && styles.rowRtl]}>
         <Text style={[styles.sectionTitle, rtl && styles.textRight]}>
           {tx(t, "savedRoutes", "Saved routes")}
         </Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => setShowSamples((current) => !current)}
-        >
-          <Text style={styles.actionText}>
-            {showSamples
-              ? tx(t, "hideSamples", "Hide samples")
-              : tx(t, "exploreSamples", "Explore sample routes")}
-          </Text>
-        </Pressable>
+        {showSamples && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setShowSamples(false)}
+          >
+            <Text style={styles.actionText}>{tx(t, "hideSamples", "Hide samples")}</Text>
+          </Pressable>
+        )}
       </View>
       <RouteCollection
         title={tx(t, "myRoutes", "My routes")}
@@ -628,17 +903,162 @@ export function RoutesScreen({
           onSelect={onSelect}
         />
       )}
-      {routeMessage && (
+      {routeMessage &&
+        !(loopGenerationFailed ||
+          (!generatedReview && Boolean(builder.start) && !importReview)) && (
         <Text
           style={[styles.footer, rtl && styles.textRight]}
           accessibilityLiveRegion="polite"
         >
           {routeMessage}
         </Text>
-      )}
+        )}
       <Text style={[styles.footer, rtl && styles.textRight]}>
         {mapText.web}
       </Text>
+    </View>
+  );
+}
+
+function PlanActionChooser({
+  t,
+  rtl,
+  styles,
+  activeAction,
+  onChoose,
+}: {
+  t: Copy;
+  rtl: boolean;
+  styles: ReturnType<typeof import("../screenStyles").createScreenStyles>;
+  activeAction: PlanActionId | null;
+  onChoose: (action: PlanActionId) => void;
+}) {
+  const labels: Record<PlanActionId, string> = {
+    "first-route": rtl ? "خطّط لمسارك الأول" : "Plan your first route",
+    samples: rtl ? "تصفح المسارات النموذجية" : "Browse sample routes",
+    endpoints: rtl
+      ? "أنشئ من البداية والوجهة"
+      : "Build from Start and Destination",
+  };
+  const hints: Record<PlanActionId, string> = {
+    "first-route": rtl
+      ? "دليل مبسط لاختيار نقطتين."
+      : "A short guide for choosing two points.",
+    samples: rtl
+      ? "راجع مساراً نموذجياً قبل اختياره."
+      : "Review an example before choosing it.",
+    endpoints: rtl
+      ? "اختر النقطتين مباشرة في منشئ المسار."
+      : "Choose both points directly in the route builder.",
+  };
+  return (
+    <View style={styles.panelAlt}>
+      <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
+        {tx(t, "planRoute", "Plan a route")}
+      </Text>
+      <View style={styles.list}>
+        {PLAN_ACTIONS.map((action, index) => (
+          <Pressable
+            key={action.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected: action.id === activeAction }}
+            accessibilityHint={hints[action.id]}
+            onPress={() => onChoose(action.id)}
+            style={index === 0 ? styles.primary : styles.secondary}
+          >
+            <Text
+              style={
+                index === 0 ? styles.primaryText : styles.secondaryText
+              }
+            >
+              {labels[action.id]}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ManualSketchReviewPanel({
+  route,
+  t,
+  rtl,
+  styles,
+  formatNumber,
+  distanceDisplay,
+  decision,
+  onUse,
+  onSave,
+  onEdit,
+  onDiscard,
+}: {
+  route: RoutePlan;
+  t: Copy;
+  rtl: boolean;
+  styles: ReturnType<typeof import("../screenStyles").createScreenStyles>;
+  formatNumber?: ScreenBaseProps["formatNumber"];
+  distanceDisplay: ScreenBaseProps["distanceDisplay"];
+  decision: "pending" | "use" | "save" | "edit";
+  onUse: () => void;
+  onSave: () => void;
+  onEdit: () => void;
+  onDiscard: () => void;
+}) {
+  const pointCount = formatNumber
+    ? formatNumber(route.points.length, { maximumFractionDigits: 0 })
+    : String(route.points.length);
+  return (
+    <View style={styles.panelAlt}>
+      <Text style={[styles.sectionTitle, rtl && styles.textRight]}>
+        {rtl ? "رسم المسار جاهز" : "Route sketch ready"}
+      </Text>
+      <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+        {tx(
+          t,
+          "straightLineWarning",
+          "This plan follows straight lines between points. It is not navigation guidance.",
+        )}
+      </Text>
+      <View style={[styles.metricRail, rtl && styles.rowRtl]}>
+        <Metric
+          label={tx(t, "points", "Points")}
+          value={pointCount}
+          styles={styles}
+        />
+        <Metric
+          label={tx(t, "distance", "Distance")}
+          value={distanceDisplay.formatDistance(route.distanceKm)}
+          styles={styles}
+        />
+      </View>
+      {decision !== "pending" && (
+        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+          {rtl ? "تم الاحتفاظ بنتيجة الرسم." : "Your sketch result is retained."}
+        </Text>
+      )}
+      <Pressable accessibilityRole="button" onPress={onUse} style={styles.primary}>
+        <Text style={styles.primaryText}>
+          {rtl ? "استخدم كخطة غير ملاحية" : "Use as a non-navigation plan"}
+        </Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" onPress={onSave} style={styles.secondary}>
+        <Text style={styles.secondaryText}>
+          {rtl ? "حفظ محلياً" : "Save locally"}
+        </Text>
+      </Pressable>
+      <View style={[styles.manualActions, rtl && styles.rowRtl]}>
+        <Pressable accessibilityRole="button" onPress={onEdit} style={styles.smallButton}>
+          <Text style={styles.smallButtonText}>
+            {rtl ? "تعديل" : "Edit"}
+          </Text>
+        </Pressable>
+        <Pressable accessibilityRole="button" onPress={onDiscard} style={styles.smallButton}>
+          <Text style={styles.smallButtonText}>
+            {rtl ? "تجاهل" : "Discard"}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -807,15 +1227,6 @@ function KnownRouteCard({
             )}
           </Text>
         )}
-        <Pressable
-          accessibilityRole="button"
-          onPress={family.onReview}
-          style={styles.secondary}
-        >
-          <Text style={styles.secondaryText}>
-            {tx(t, "previewWithoutLocation", "Preview without location")}
-          </Text>
-        </Pressable>
         {family.onRecordWithoutFollowing && (
           <Pressable
             accessibilityRole="button"
@@ -860,6 +1271,9 @@ function LocationField({
   onFocus,
   onChooseOnMap,
   onUseCurrent,
+  committedPoint,
+  textIsCommitted,
+  onClearPoint,
   inputRef,
 }: {
   t: Copy;
@@ -874,6 +1288,9 @@ function LocationField({
   onFocus: () => void;
   onChooseOnMap: () => void;
   onUseCurrent: () => void;
+  committedPoint?: PlannerPoint | null;
+  textIsCommitted?: boolean;
+  onClearPoint?: () => void;
   inputRef?: RefObject<TextInput | null>;
 }) {
   return (
@@ -924,6 +1341,39 @@ function LocationField({
           "Name a point or choose it: on the map, from your current location, or from a saved point. Typing does not search places.",
         )}
       </Text>
+      {committedPoint ? (
+        <View style={styles.statusLine}>
+          <View style={styles.statusDot} />
+          <View style={styles.routeRowCopy}>
+            <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
+              {rtl ? "نقطة مختارة" : "Selected point"}: {committedPoint.name}
+            </Text>
+            <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+              {textIsCommitted
+                ? rtl
+                  ? "تم تثبيت هذه النقطة."
+                  : "Committed for route matching."
+                : rtl
+                  ? "النقطة محفوظة أثناء تعديل النص؛ اختر النص لتحديثها."
+                  : "The point stays selected while you edit text; choose the text to update it."}
+            </Text>
+          </View>
+          {onClearPoint && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${tx(t, "clear", "Clear")} ${label}`}
+              onPress={onClearPoint}
+              style={styles.smallButton}
+            >
+              <Text style={styles.smallButtonText}>{tx(t, "clear", "Clear")}</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : (
+        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+          {rtl ? "لم يتم تثبيت هذه النقطة بعد." : "This endpoint is not committed yet."}
+        </Text>
+      )}
     </View>
   );
 }
@@ -1497,6 +1947,22 @@ function RouteCollection({
             const canonical = asCanonicalRoute(route)!;
             const chip = routeChipFor(canonical, t);
             const distance = distanceDisplay.formatDistance(route.distanceKm);
+            const geometryLabel =
+              routeOwnership(canonical) === "catalog"
+                ? tx(t, "waypointTrace", "Point-to-point preview")
+                : routeGeometryKind(canonical) === "road_matched"
+                  ? tx(t, "roadMatched", "Road-matched")
+                  : routeGeometryKind(canonical) === "recorded_trace"
+                    ? tx(t, "recordedTrace", "Recorded track")
+                    : tx(t, "waypointTrace", "Point-to-point preview");
+            const sampleActionLabel =
+              kind === "samples"
+                ? tx(
+                    t,
+                    "selectThisRoute",
+                    rtl ? "اختر هذا المسار" : "Select this route",
+                  )
+                : null;
             return (
               <Pressable
                 key={route.id}
@@ -1520,9 +1986,8 @@ function RouteCollection({
                   </Text>
                   <Text style={[styles.listRowMeta, rtl && styles.textRight]}>
                     {distance} · {chip.label} ·{" "}
-                    {routeGeometryKind(canonical) === "road_matched"
-                      ? tx(t, "roadMatched", "Road-matched")
-                      : tx(t, "recordedTrack", "Recorded track")}
+                    {geometryLabel}
+                    {sampleActionLabel ? ` · ${sampleActionLabel}` : ""}
                   </Text>
                 </View>
                 <Text style={styles.actionText}>›</Text>
