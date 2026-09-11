@@ -1,5 +1,6 @@
 import type { RoutePlan, TimedWind, WindForecast, WindKind } from './domain';
 import { departureInstant, formatBahrainTime, BAHRAIN_LOCALES } from './routeTime';
+import { routePlanHasAuthoritativeGeometry } from './routeRepository';
 
 const radians = (degrees: number) => (degrees * Math.PI) / 180;
 
@@ -36,6 +37,7 @@ function nearestWind(forecasts: TimedWind[], target: Date) {
 }
 
 export function analyseRoute(seed: RoutePlan, baseSpeed = 26, departureOffsetMinutes = 0, liveWind?: WindForecast, hourlyWind: TimedWind[] = [], departureAt?: Date): RoutePlan {
+  if (!canAnalyseRoute(seed)) return withoutFinalMetrics(seed);
   const fallbackWind = liveWind ?? { speed: 18, directionFrom: 330, gusts: 29 };
   let elapsedMinutes = 0;
   let lastDistance = seed.points[0]?.distanceKm ?? 0;
@@ -58,5 +60,45 @@ export function analyseRoute(seed: RoutePlan, baseSpeed = 26, departureOffsetMin
   });
   const total = seed.points[seed.points.length - 1]?.distanceKm || seed.distanceKm || 1;
   const arrivalAt = new Date(startDate.getTime() + elapsedMinutes * 60_000).toISOString();
-  return { ...seed, departureAt: startDate.toISOString(), departureLabel: formatBahrainTime(startDate, BAHRAIN_LOCALES.en, { hour12: false }), durationMinutes: Math.round(elapsedMinutes), arrivalAt, arrivalLabel: formatBahrainTime(arrivalAt, BAHRAIN_LOCALES.en, { hour12: false }), segments, windSummary: { tailwindPercent: Math.round((counts.tailwind / total) * 100), headwindPercent: Math.round((counts.headwind / total) * 100), crosswindPercent: Math.round((counts.crosswind / total) * 100) } };
+  if (!routePlanHasAuthoritativeGeometry(seed)) return withoutFinalMetrics(seed, previewSegments(segments));
+  return { ...seed, distanceStatus: 'authoritative', departureAt: startDate.toISOString(), departureLabel: formatBahrainTime(startDate, BAHRAIN_LOCALES.en, { hour12: false }), durationMinutes: Math.round(elapsedMinutes), arrivalAt, arrivalLabel: formatBahrainTime(arrivalAt, BAHRAIN_LOCALES.en, { hour12: false }), segments, windSummary: { tailwindPercent: Math.round((counts.tailwind / total) * 100), headwindPercent: Math.round((counts.headwind / total) * 100), crosswindPercent: Math.round((counts.crosswind / total) * 100) } };
+}
+
+function canAnalyseRoute(route: RoutePlan) {
+  if (route.geometryStatus !== 'ready' || (route.geometryKind !== 'road_matched' && route.geometryKind !== 'recorded_trace')) return false;
+  if (route.geometryKind === 'road_matched' && !routePlanHasAuthoritativeGeometry(route)) return false;
+  if (route.points.length < 2 || !Number.isFinite(route.distanceKm) || route.distanceKm <= 0) return false;
+  return route.points.every((point, index) => Number.isFinite(point.distanceKm) && point.distanceKm >= 0 && (index === 0 || point.distanceKm >= route.points[index - 1].distanceKm));
+}
+
+function withoutFinalMetrics(seed: RoutePlan, segments: RoutePlan['segments'] = []): RoutePlan {
+  const provisionalDistanceKm = Number.isFinite(seed.provisionalDistanceKm) && (seed.provisionalDistanceKm ?? 0) >= 0
+    ? seed.provisionalDistanceKm!
+    : Number.isFinite(seed.distanceKm) && seed.distanceKm >= 0
+      ? seed.distanceKm
+      : seed.points.at(-1)?.distanceKm ?? 0;
+  return {
+    ...seed,
+    distanceKm: provisionalDistanceKm,
+    provisionalDistanceKm,
+    distanceStatus: 'provisional',
+    departureAt: undefined,
+    arrivalAt: undefined,
+    departureLabel: '',
+    arrivalLabel: '',
+    durationMinutes: 0,
+    recommendation: '',
+    segments,
+    windSummary: { tailwindPercent: 0, headwindPercent: 0, crosswindPercent: 0 },
+  };
+}
+
+function previewSegments(segments: RoutePlan['segments']): RoutePlan['segments'] {
+  return segments.map((segment) => ({
+    ...segment,
+    arrivalAt: undefined,
+    arrivalLabel: '',
+    wind: { kind: 'crosswind', magnitudeKph: 0, headwindKph: 0, crosswindKph: 0 },
+    insight: '',
+  }));
 }

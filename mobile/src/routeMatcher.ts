@@ -1,5 +1,6 @@
 import type { Coordinate, Confidence, PositionMatch, PositionMatchState, RoutePlan } from './domain';
 import { routeProgress } from './routeProgress';
+import { routePlanHasAuthoritativeGeometry } from './routeRepository';
 
 export type MatchOptions = {
   accuracyMeters?: number;
@@ -21,6 +22,7 @@ const STALE_AFTER_MS = 90_000;
 
 export function matchRoutePosition(route: RoutePlan, coordinate: Coordinate, options: MatchOptions = {}): PositionMatch {
   const timestamp = toIso(options.timestamp ?? new Date());
+  if (!routePlanHasAuthoritativeGeometry(route)) return unavailableMatch(timestamp, options.accuracyMeters);
   const previous = options.previous;
   const raw = routeProgress(route, coordinate, 0);
   const accuracyMeters = options.accuracyMeters;
@@ -38,11 +40,12 @@ export function matchRoutePosition(route: RoutePlan, coordinate: Coordinate, opt
 }
 
 export function createStatefulRouteMatcher(route: RoutePlan): StatefulRouteMatcher {
+  const reviewedRoute = clone(route);
   let last: PositionMatch | undefined;
   let reverseEvidence = 0;
   return {
     update: (coordinate, options = {}) => {
-      const raw = matchRoutePosition(route, coordinate, { ...options, ...(last ? { previous: last } : {}) });
+      const raw = matchRoutePosition(reviewedRoute, coordinate, { ...options, ...(last ? { previous: last } : {}) });
       let next = raw;
       if (last && raw.progress < last.progress - 0.02 && raw.state === 'matched') {
         reverseEvidence += 1;
@@ -83,3 +86,18 @@ function toIso(value: string | Date) {
   if (!Number.isFinite(date.getTime())) throw new RangeError('Expected a valid location timestamp.');
   return date.toISOString();
 }
+
+function unavailableMatch(timestamp: string, accuracyMeters?: number): PositionMatch {
+  return {
+    routeDistanceKm: 0,
+    progress: 0,
+    confidence: 'low',
+    state: 'uncertain',
+    ...(accuracyMeters !== undefined ? { accuracyMeters } : {}),
+    candidateCount: 0,
+    timestamp,
+    offCorridorKm: Number.POSITIVE_INFINITY,
+  };
+}
+
+function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }

@@ -44,20 +44,28 @@ export type RouteRevisionRecordMetadata = Omit<RouteRecordMetadata, 'revision' |
  * legacy routes keep their existing identity unchanged.
  */
 export function routeRecordFromPlan(plan: RoutePlan, metadata: RouteRecordMetadata): RouteRecord {
-  const isNbhCatalogPlan = plan.id === NBH_FAMILY_ID || metadata.familyId === NBH_FAMILY_ID;
+  const isNbhCatalogPlan = metadata.ownership === 'catalog' && (plan.id === NBH_FAMILY_ID || metadata.familyId === NBH_FAMILY_ID);
   const familyId = metadata.familyId ?? plan.familyId ?? (isNbhCatalogPlan ? NBH_FAMILY_ID : undefined);
   const variantId = metadata.variantId ?? plan.variantId ?? (isNbhCatalogPlan ? NBH_VARIANT_ID : undefined);
   const revision = metadata.revision ?? plan.revision ?? 1;
   const revisionId = metadata.revisionId ?? plan.revisionId ?? (isNbhCatalogPlan && revision === 1 ? NBH_REVISION_ID : undefined);
-  const corridor = metadata.corridor ?? (plan.id === NBH_FAMILY_ID ? plan.corridor : undefined);
+  const corridor = metadata.corridor ?? (isNbhCatalogPlan ? plan.corridor : undefined);
   assertCorridorLinkage(corridor, variantId, revisionId);
-  const geometryCoordinates = plan.geometry?.map(clone) ?? corridor?.coordinates.map(clone) ?? plan.points.map(toCoordinate);
+  const hasExplicitGeometry = plan.geometry !== undefined;
+  const explicitReadyRoad = metadata.geometry.status === 'ready' && metadata.geometry.kind === 'road_matched';
+  const geometryCoordinates = plan.geometry?.map(clone) ?? (explicitReadyRoad ? [] : corridor?.coordinates.map(clone) ?? plan.points.map(toCoordinate));
   const geometrySource = metadata.geometry.source ?? plan.geometrySource;
-  const geometryDistancesKm = plan.geometryDistancesKm ?? corridor?.distancesKm;
-  const distanceKm = corridor?.distancesKm.at(-1) ?? plan.distanceKm;
+  const geometryDistancesKm = normalizeDistanceIndex(
+    plan.geometryDistancesKm
+      ?? (!plan.geometry && !explicitReadyRoad ? corridor?.distancesKm : undefined)
+      ?? (plan.geometry && geometryMatchesPoints(geometryCoordinates, plan.points) ? plan.points.map((point) => point.distanceKm) : undefined),
+    geometryCoordinates.length,
+  );
+  const distanceKm = (!plan.geometry && !explicitReadyRoad ? corridor?.distancesKm.at(-1) : undefined) ?? plan.distanceKm;
   const name = isNbhCatalogPlan ? 'NBH Loop' : plan.name;
   const nameAr = isNbhCatalogPlan ? 'حلقة ناصر بن حمد' : plan.nameAr;
-  const analysis: RouteAnalysisSnapshot = {
+  const carriesAnalysis = metadata.geometry.status === 'ready' && metadata.geometry.kind !== 'waypoint_trace';
+  const analysis: RouteAnalysisSnapshot | undefined = carriesAnalysis ? {
     distanceKm,
     // Canonical records keep instants as the source of truth. Empty labels are
     // retained only to satisfy the legacy RoutePlan/RouteAnalysis shape.
@@ -71,8 +79,14 @@ export function routeRecordFromPlan(plan: RoutePlan, metadata: RouteRecordMetada
     ...(revision ? { routeRevision: revision } : {}),
     ...(plan.departureAt ? { departureAt: plan.departureAt } : {}),
     ...(plan.arrivalAt ? { arrivalAt: plan.arrivalAt } : {}),
-  };
-  return {
+  } : undefined;
+  const shouldStoreProvisionalDistance = metadata.geometry.status !== 'ready'
+    || metadata.geometry.kind !== 'road_matched'
+    || (metadata.geometry.kind === 'road_matched' && geometryDistancesKm?.at(-1) === undefined);
+  const provisionalDistanceKm = plan.provisionalDistanceKm ?? (
+    shouldStoreProvisionalDistance ? finiteNonNegative(plan.distanceKm) ?? pointDistanceKm(plan.points) : undefined
+  );
+  const record: RouteRecord = {
     id: plan.id,
     ...(familyId ? { familyId } : {}),
     ...(variantId ? { variantId } : {}),
@@ -93,8 +107,19 @@ export function routeRecordFromPlan(plan: RoutePlan, metadata: RouteRecordMetada
     roadEvidenceStatus: metadata.roadEvidenceStatus,
     revision,
     provenance: clone(metadata.provenance),
-    analysis,
+    ...(provisionalDistanceKm !== undefined ? { provisionalDistanceKm } : {}),
+    ...(analysis ? { analysis } : {}),
   };
+  if (record.geometry.status === 'ready' && record.geometry.kind === 'road_matched' && !routeRecordHasAuthoritativeGeometry(record)) {
+    record.geometry = {
+      kind: 'waypoint_trace',
+      status: 'unavailable',
+      coordinates: record.points.map(toCoordinate),
+    };
+    record.provisionalDistanceKm = record.provisionalDistanceKm ?? pointDistanceKm(record.points);
+    if (hasExplicitGeometry) record.analysis = undefined;
+  }
+  return record;
 }
 
 /** Bind a render plan to one immutable catalog revision and its corridor. */
@@ -131,9 +156,25 @@ export const createRouteRecordFromRevision = routeRecordFromRevision;
 
 /** Convert a canonical record back to the existing renderer/analysis shape. */
 export function routePlanFromRecord(record: RouteRecord): RoutePlan {
-  const analysis = record.geometry.kind === 'waypoint_trace' ? undefined : record.analysis;
-  const fallbackDistance = record.geometry.distancesKm?.at(-1) ?? record.corridor?.distancesKm.at(-1) ?? record.points.at(-1)?.distanceKm ?? 0;
-  const renderedGeometry = record.geometry.status === 'ready' ? record.geometry.coordinates : undefined;
+  const authoritative = routeRecordHasAuthoritativeGeometry(record);
+  const invalidReadyRoad = record.geometry.status === 'ready' && record.geometry.kind === 'road_matched' && !authoritative;
+  const geometryKind = invalidReadyRoad ? 'waypoint_trace' : record.geometry.kind;
+  const geometryStatus = invalidReadyRoad ? 'unavailable' : record.geometry.status;
+  const currentAnalysis = isCurrentAnalysis(record) ? record.analysis : undefined;
+  const analysis = ((record.geometry.status === 'ready' && record.geometry.kind !== 'recorded_trace') || (record.geometry.status === 'matching' && record.geometry.kind === 'recorded_trace'))
+    && record.geometry.kind !== 'waypoint_trace'
+    && (!invalidReadyRoad || authoritative)
+    ? currentAnalysis
+    : undefined;
+  const fallbackDistance = invalidReadyRoad
+    ? record.provisionalDistanceKm ?? record.points.at(-1)?.distanceKm ?? 0
+    : record.geometry.status === 'ready'
+    ? record.geometry.distancesKm?.at(-1) ?? record.corridor?.distancesKm.at(-1) ?? record.points.at(-1)?.distanceKm ?? record.provisionalDistanceKm ?? 0
+    : record.geometry.kind === 'waypoint_trace' && record.geometry.status === 'unavailable'
+      ? record.provisionalDistanceKm ?? record.geometry.distancesKm?.at(-1) ?? record.corridor?.distancesKm.at(-1) ?? record.points.at(-1)?.distanceKm ?? 0
+      : record.geometry.distancesKm?.at(-1) ?? record.corridor?.distancesKm.at(-1) ?? record.points.at(-1)?.distanceKm ?? record.provisionalDistanceKm ?? 0;
+  const distanceKm = authoritative ? record.geometry.distancesKm?.at(-1) ?? 0 : analysis?.distanceKm ?? fallbackDistance;
+  const renderedGeometry = geometryStatus === 'ready' ? record.geometry.coordinates : undefined;
   return {
     id: record.id,
     ...(record.familyId ? { familyId: record.familyId } : {}),
@@ -143,12 +184,19 @@ export function routePlanFromRecord(record: RouteRecord): RoutePlan {
     name: record.name,
     ...(record.nameAr ? { nameAr: record.nameAr } : {}),
     source: record.provenance.source,
+    geometryKind,
+    geometryStatus,
+    origin: record.origin,
+    ownership: record.ownership,
+    provenance: clone(record.provenance),
+    distanceStatus: authoritative ? 'authoritative' : 'provisional',
+    ...(record.provisionalDistanceKm !== undefined ? { provisionalDistanceKm: record.provisionalDistanceKm } : {}),
     points: clone(record.points),
     ...(renderedGeometry?.length ? { geometry: clone(renderedGeometry) } : {}),
-    ...(renderedGeometry && record.geometry.distancesKm ? { geometryDistancesKm: clone(record.geometry.distancesKm) } : {}),
+    ...(renderedGeometry && record.geometry.distancesKm?.length === renderedGeometry.length ? { geometryDistancesKm: clone(record.geometry.distancesKm) } : {}),
     ...(renderedGeometry && record.geometry.source ? { geometrySource: record.geometry.source } : {}),
     ...(record.corridor ? { corridor: clone(record.corridor) } : {}),
-    distanceKm: analysis?.distanceKm ?? fallbackDistance,
+    distanceKm,
     ...(analysis?.departureAt ? { departureAt: analysis.departureAt } : {}),
     ...(analysis?.arrivalAt ? { arrivalAt: analysis.arrivalAt } : {}),
     departureLabel: analysis?.departureLabel ?? '',
@@ -161,6 +209,41 @@ export function routePlanFromRecord(record: RouteRecord): RoutePlan {
 }
 
 export const planFromRouteRecord = routePlanFromRecord;
+
+/** A plan is matchable only when all readiness and distance evidence is explicit. */
+export function routePlanHasAuthoritativeGeometry(route: RoutePlan): boolean {
+  const geometry = route.geometry;
+  return route.geometryStatus === 'ready'
+    && route.geometryKind === 'road_matched'
+    && route.distanceStatus === 'authoritative'
+    && typeof route.geometrySource === 'string'
+    && route.geometrySource.trim().length > 0
+    && route.points.length >= 2
+    && hasFiniteCoordinates(route.points)
+    && hasValidPointDistanceIndex(route.points)
+    && hasFiniteCoordinates(geometry)
+    && endpointsCorrespond(geometry!, route.points)
+    && hasValidDistanceIndex(route.geometryDistancesKm, geometry?.length ?? 0)
+    && geometry!.length >= 2
+    && Number.isFinite(route.distanceKm)
+    && route.distanceKm > 0
+    && geometryDistanceMatches(route.distanceKm, route.geometryDistancesKm!.at(-1)!);
+}
+
+/** Canonical readiness gate shared by lifecycle and repository consumers. */
+export function routeRecordHasAuthoritativeGeometry(record: RouteRecord): boolean {
+  return record.geometry.status === 'ready'
+    && record.geometry.kind === 'road_matched'
+    && typeof record.geometry.source === 'string'
+    && record.geometry.source.trim().length > 0
+    && record.points.length >= 2
+    && hasFiniteCoordinates(record.points)
+    && hasValidPointDistanceIndex(record.points)
+    && hasFiniteCoordinates(record.geometry.coordinates)
+    && endpointsCorrespond(record.geometry.coordinates, record.points)
+    && hasValidDistanceIndex(record.geometry.distancesKm, record.geometry.coordinates.length)
+    && record.geometry.coordinates.length >= 2;
+}
 
 export type RouteAnalysisKeyInput = Pick<RouteRecord, 'id' | 'revision'>;
 
@@ -315,9 +398,9 @@ export function createRouteRepository(initialRoutes: readonly RouteRecord[] = []
         ? routeOrSnapshot
         : createActiveRideSnapshot(routeOrSnapshot, startedAt ?? new Date(), options);
       activeRide = deepFreeze(clone(snapshot));
-      return activeRide;
+      return deepFreeze(clone(activeRide));
     },
-    getActiveRide: () => activeRide,
+    getActiveRide: () => activeRide ? deepFreeze(clone(activeRide)) : undefined,
     clearActiveRide: () => { activeRide = undefined; },
     analysisKey: (route, departureAt) => routeAnalysisKey(route, departureAt),
   };
@@ -325,6 +408,13 @@ export function createRouteRepository(initialRoutes: readonly RouteRecord[] = []
 
 function isActiveRideSnapshot(value: RouteRecord | ActiveRideSnapshot): value is ActiveRideSnapshot {
   return 'routeId' in value && 'routeRevision' in value && 'startedAt' in value && 'route' in value;
+}
+
+function isCurrentAnalysis(record: RouteRecord): record is RouteRecord & { analysis: RouteAnalysisSnapshot } {
+  const analysis = record.analysis;
+  return Boolean(analysis
+    && (analysis.routeId === undefined || analysis.routeId === record.id)
+    && (analysis.routeRevision === undefined || analysis.routeRevision === record.revision));
 }
 
 function assertCorridorLinkage(
@@ -346,6 +436,49 @@ function normalizeInstant(value: string | Date | undefined): string {
 }
 
 function toCoordinate(point: Coordinate): Coordinate { return { latitude: point.latitude, longitude: point.longitude }; }
+function normalizeDistanceIndex(value: number[] | undefined, expectedLength: number) {
+  return value && hasValidDistanceIndex(value, expectedLength) ? clone(value) : undefined;
+}
+function hasValidDistanceIndex(value: number[] | undefined, expectedLength: number) {
+  return Boolean(value && value.length === expectedLength && value.length >= 2 && value[0] === 0 && value.at(-1)! > 0 && value.every((distance, index) => Number.isFinite(distance) && distance >= 0 && (index === 0 || distance >= value[index - 1])));
+}
+function hasFiniteCoordinates(value: Array<Coordinate> | undefined): value is Array<Coordinate> {
+  return Boolean(value && value.length >= 2 && value.every((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude)));
+}
+function geometryMatchesPoints(geometry: Coordinate[], points: Coordinate[]) {
+  return geometry.length === points.length && geometry.every((point, index) => point.latitude === points[index].latitude && point.longitude === points[index].longitude);
+}
+function hasValidPointDistanceIndex(points: Array<Coordinate & { distanceKm: number }>) {
+  return points.length >= 2
+    && points[0].distanceKm === 0
+    && points.at(-1)!.distanceKm > 0
+    && points.every((point, index) => Number.isFinite(point.distanceKm) && point.distanceKm >= 0 && (index === 0 || point.distanceKm >= points[index - 1].distanceKm));
+}
+function endpointsCorrespond(geometry: Coordinate[], points: Coordinate[]) {
+  return coordinateDistanceKm(geometry[0], points[0]) <= 2
+    && coordinateDistanceKm(geometry.at(-1)!, points.at(-1)!) <= 2;
+}
+function geometryDistanceMatches(routeDistanceKm: number, geometryDistanceKm: number) {
+  const toleranceKm = Math.max(0.25, routeDistanceKm * 0.1);
+  return Math.abs(routeDistanceKm - geometryDistanceKm) <= toleranceKm;
+}
+function finiteNonNegative(value: number | undefined) { return value !== undefined && Number.isFinite(value) && value >= 0 ? value : null; }
+function pointDistanceKm(points: Array<Coordinate & { distanceKm?: number }>) {
+  const indexed = points.at(-1)?.distanceKm;
+  if (indexed !== undefined && Number.isFinite(indexed) && indexed >= 0) return indexed;
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) total += coordinateDistanceKm(points[index - 1], points[index]);
+  return Number.isFinite(total) ? total : 0;
+}
+function coordinateDistanceKm(first: Coordinate, second: Coordinate) {
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const dLat = radians(second.latitude - first.latitude);
+  const dLon = radians(second.longitude - first.longitude);
+  const lat1 = radians(first.latitude);
+  const lat2 = radians(second.latitude);
+  const value = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 
 function deepFreeze<T>(value: T): T {

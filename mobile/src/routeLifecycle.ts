@@ -1,6 +1,6 @@
 import { ROUTE_MATCHING_MAX_WAYPOINTS } from './domain';
 import type { ActiveRideSnapshot, Coordinate, RouteGeometryKind, RoutePlan, RouteRecord } from './domain';
-import { createActiveRideSnapshot, routeAnalysisKey } from './routeRepository';
+import { createActiveRideSnapshot, routeAnalysisKey, routePlanHasAuthoritativeGeometry, routeRecordHasAuthoritativeGeometry } from './routeRepository';
 
 export type RouteLifecycleStage =
   | 'draft'
@@ -101,6 +101,8 @@ export function validateRouteLifecycle(route: RouteRecord): RouteValidationState
   if (next.points.length < 2) return { state: 'draft', route: next };
   if (!next.points.every(isCoordinate)) return matchingFailure(next, 'invalidResponse');
   if (next.geometry.status === 'unavailable') return matchingFailure(next, 'noRoute');
+  if (next.geometry.status !== 'ready') next.analysis = undefined;
+  if (next.geometry.status === 'ready' && next.geometry.kind === 'road_matched' && !routeRecordHasAuthoritativeGeometry(next)) return matchingFailure(next, 'invalidResponse');
   return { state: 'validated', route: next };
 }
 
@@ -112,6 +114,7 @@ export function beginRouteMatching(route: RouteRecord): RouteLifecycleState {
   if (validated.state === 'draft' || validated.state === 'matching-failed') return validated;
   const next = clone(validated.route);
   next.geometry = { kind: 'road_matched', status: 'matching', coordinates: [] };
+  next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
   next.revision += 1;
   next.analysis = undefined;
   return { state: 'matching', route: next, waypointCount: next.points.length, maxWaypoints: ROUTE_MATCHING_WAYPOINT_LIMIT };
@@ -121,9 +124,15 @@ export const startRouteMatching = beginRouteMatching;
 
 export function routeMatchingSucceeded(route: RouteRecord, matchedPlan: RoutePlan): TraceReadyState | MatchingFailedState {
   const coordinates = matchedPlan.geometry?.map(toCoordinate) ?? [];
-  if (coordinates.length < 2) return matchingFailure(route, 'invalidResponse');
+  if (route.geometry.status !== 'matching'
+    || route.geometry.kind !== 'road_matched'
+    || matchedPlan.id !== route.id
+    || (matchedPlan.revision !== undefined && matchedPlan.revision !== route.revision)
+    || (matchedPlan.revisionId !== undefined && route.revisionId !== undefined && matchedPlan.revisionId !== route.revisionId)
+    || !routePlanHasAuthoritativeGeometry(matchedPlan)) return matchingFailure(route, 'invalidResponse');
+  if (!coordinatesMatchEndpoints(coordinates, route.points) || !matchedPointsMatchRoute(matchedPlan.points, route.points)) return matchingFailure(route, 'invalidResponse');
   const next = clone(route);
-  next.points = clone(matchedPlan.points);
+  next.points = mergeMatchedPoints(next.points, matchedPlan.points);
   next.geometry = {
     kind: 'road_matched',
     status: 'ready',
@@ -152,6 +161,7 @@ export function waypointLimitExceeded(route: RouteRecord): WaypointLimitState {
     status: 'unavailable',
     coordinates: next.points.map(toCoordinate),
   };
+  next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
   next.revision += 1;
   next.analysis = undefined;
   return {
@@ -175,6 +185,7 @@ export function traceReady(route: RouteRecord, kind: Extract<RouteGeometryKind, 
     status: 'ready',
     coordinates: next.geometry.coordinates.length ? next.geometry.coordinates : next.points.map(toCoordinate),
   };
+  next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
   next.revision += 1;
   next.analysis = undefined;
   return { state: 'trace-ready', route: next };
@@ -207,7 +218,7 @@ export const markSelected = selectRoute;
 
 export function analyseSelectedRoute(routeOrState: RouteRecord | SelectedState, departureAt: string | Date): AnalysisState {
   const route = 'state' in routeOrState ? routeOrState.route : routeOrState;
-  if (route.geometry.status !== 'ready') throw new Error('Only a ready route can be analysed.');
+  if (!routeRecordHasAuthoritativeGeometry(route)) throw new Error('Only an explicit ready road route can be analysed.');
   return { state: 'analysis', route: clone(route), analysisKey: routeAnalysisKey(route, departureAt) };
 }
 
@@ -219,7 +230,7 @@ export const analyseRouteLifecycle = analyseSelectedRoute;
  */
 export function liveRidePolicyGate(route: RouteRecord, _policy?: WaypointTraceLiveRidePolicy): LiveRidePolicyGate {
   if (route.geometry.status !== 'ready') return { allowed: false, decision: 'blocked', reason: 'route_not_ready' };
-  if (route.geometry.kind !== 'road_matched') {
+  if (!routeRecordHasAuthoritativeGeometry(route)) {
     return { allowed: false, decision: 'blocked', reason: 'geometry_not_road_matched' };
   }
   return { allowed: true, decision: 'allowed', reason: 'ready' };
@@ -229,11 +240,12 @@ export const waypointTraceLiveRideGate = liveRidePolicyGate;
 
 export function navigationPolicyGate(route: RouteRecord): NavigationPolicyGate {
   if (route.geometry.status !== 'ready') return { allowed: false, reason: 'route_not_ready' };
-  if (route.geometry.kind !== 'road_matched') return { allowed: false, reason: 'geometry_not_road_matched' };
+  if (!routeRecordHasAuthoritativeGeometry(route)) return { allowed: false, reason: 'geometry_not_road_matched' };
   return { allowed: true, reason: 'road_matched' };
 }
 
 export const canUseForNavigation = (route: RouteRecord) => navigationPolicyGate(route).allowed;
+export const routeIsNavigable = canUseForNavigation;
 
 export function startActiveRide(routeOrState: RouteRecord | SelectedState | AnalysisState, startedAt: string | Date, policy?: WaypointTraceLiveRidePolicy, options: { analysisKey?: string } = {}): ActiveRideStartResult {
   const route = 'state' in routeOrState ? routeOrState.route : routeOrState;
@@ -252,6 +264,36 @@ export function endActiveRide(activeOrState: ActiveRideSnapshot | { state: 'acti
 
 export const markRideEnded = endActiveRide;
 
+export type ReverseRouteResult =
+  | { ok: true; state: 'draft'; route: RouteRecord }
+  | { ok: false; state: 'unavailable'; reason: 'tooFewWaypoints' | 'shared-start-finish' };
+
+/** Reverse a route as a new draft; shared-start loops have no distinct reverse endpoints. */
+export function reverseRoute(route: RouteRecord): ReverseRouteResult {
+  if (route.points.length < 2) return { ok: false, state: 'unavailable', reason: 'tooFewWaypoints' };
+  if (sameCoordinate(route.points[0], route.points.at(-1)!)) return { ok: false, state: 'unavailable', reason: 'shared-start-finish' };
+  const next = clone(route);
+  const reversed = clone(route.points).reverse();
+  let cumulativeDistanceKm = 0;
+  next.points = reversed.map((point, index) => {
+    if (index > 0) cumulativeDistanceKm += coordinateDistanceKm(reversed[index - 1], point);
+    const following = reversed[index + 1] ?? point;
+    return { ...point, distanceKm: cumulativeDistanceKm, headingDegrees: bearingDegrees(point, following) };
+  });
+  next.geometry = {
+    kind: 'waypoint_trace',
+    status: 'draft',
+    coordinates: next.points.map(toCoordinate),
+  };
+  next.provisionalDistanceKm = cumulativeDistanceKm;
+  next.revision += 1;
+  if (next.revisionId) next.revisionId = `${next.revisionId}-r${next.revision}`;
+  next.analysis = undefined;
+  return { ok: true, state: 'draft', route: next };
+}
+
+export const reverseRouteLifecycle = reverseRoute;
+
 function matchingFailure(route: RouteRecord, reason: RouteMatchingFailureReason): MatchingFailedState {
   const next = clone(route);
   next.geometry = {
@@ -259,7 +301,8 @@ function matchingFailure(route: RouteRecord, reason: RouteMatchingFailureReason)
     status: 'unavailable',
     coordinates: next.points.map(toCoordinate),
   };
-  next.revision += 1;
+  next.provisionalDistanceKm = next.provisionalDistanceKm ?? pointDistanceKm(next.points);
+  if (route.geometry.status !== 'unavailable') next.revision += 1;
   next.analysis = undefined;
   return { state: 'matching-failed', route: next, reason, recoverable: true, recoveryActions: ['retry', 'edit-points'] };
 }
@@ -272,6 +315,59 @@ function notReadyState(route: RouteRecord): RouteLifecycleState {
 
 function isCoordinate(value: Coordinate) { return Number.isFinite(value.latitude) && Number.isFinite(value.longitude); }
 function toCoordinate(point: Coordinate): Coordinate { return { latitude: point.latitude, longitude: point.longitude }; }
+function coordinatesMatchEndpoints(geometry: Coordinate[], points: Coordinate[]) {
+  return geometry.length >= 2
+    && points.length >= 2
+    && isCoordinate(geometry[0])
+    && isCoordinate(geometry.at(-1)!)
+    && coordinateDistanceKm(geometry[0], points[0]) <= 2
+    && coordinateDistanceKm(geometry.at(-1)!, points.at(-1)!) <= 2;
+}
+function matchedPointsMatchRoute(matched: RoutePlan['points'], requested: RouteRecord['points']) {
+  if (matched.length !== requested.length || matched.length < 2) return false;
+  return matched[0].distanceKm === 0
+    && matched.at(-1)!.distanceKm > 0
+    && matched.every((point, index) => isCoordinate(point)
+    && Number.isFinite(point.distanceKm)
+    && point.distanceKm >= 0
+    && (index === 0 || point.distanceKm >= matched[index - 1].distanceKm)
+    && coordinateDistanceKm(point, requested[index]) <= 2);
+}
+function mergeMatchedPoints(requested: RouteRecord['points'], matched: RoutePlan['points']): RouteRecord['points'] {
+  return requested.map((point, index) => ({
+    ...point,
+    latitude: matched[index].latitude,
+    longitude: matched[index].longitude,
+    distanceKm: matched[index].distanceKm,
+    headingDegrees: matched[index].headingDegrees,
+  }));
+}
+function sameCoordinate(first: Coordinate, second: Coordinate) {
+  return first.latitude === second.latitude && first.longitude === second.longitude;
+}
+function pointDistanceKm(points: RouteRecord['points']) {
+  const indexed = points.at(-1)?.distanceKm;
+  if (indexed !== undefined && Number.isFinite(indexed) && indexed >= 0) return indexed;
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) total += coordinateDistanceKm(points[index - 1], points[index]);
+  return total;
+}
+function coordinateDistanceKm(first: Coordinate, second: Coordinate) {
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const dLat = radians(second.latitude - first.latitude);
+  const dLon = radians(second.longitude - first.longitude);
+  const lat1 = radians(first.latitude);
+  const lat2 = radians(second.latitude);
+  const value = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+function bearingDegrees(from: Coordinate, to: Coordinate) {
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const degrees = (value: number) => (value * 180) / Math.PI;
+  const y = Math.sin(radians(to.longitude - from.longitude)) * Math.cos(radians(to.latitude));
+  const x = Math.cos(radians(from.latitude)) * Math.sin(radians(to.latitude)) - Math.sin(radians(from.latitude)) * Math.cos(radians(to.latitude)) * Math.cos(radians(to.longitude - from.longitude));
+  return (degrees(Math.atan2(y, x)) + 360) % 360;
+}
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function normalizeInstant(value: string | Date): string {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);

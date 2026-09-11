@@ -16,6 +16,9 @@ export type RouteGeometryKind =
   "road_matched" | "recorded_trace" | "waypoint_trace";
 export type RouteGeometryStatus =
   "draft" | "matching" | "ready" | "unavailable";
+/** Renderer-only absence marker retained for legacy RoutePlan adapters. */
+export type RoutePlanGeometryKind = RouteGeometryKind | "none";
+export type RouteDistanceStatus = "provisional" | "authoritative";
 export type RoadEvidenceStatus = "pilot_pending" | "unknown" | "sourced";
 export type CatalogStatus = "available" | "preview" | "unavailable";
 export type RouteReviewStatus = "reviewed" | "pending" | "unavailable";
@@ -199,6 +202,15 @@ export type RoutePlan = {
   geometrySource?: string;
   /** Optional catalog corridor retained by the NBH preview adapter. */
   corridor?: RouteCorridor;
+  /** Canonical geometry truth is carried explicitly into short-lived plans. */
+  geometryKind?: RoutePlanGeometryKind;
+  geometryStatus?: RouteGeometryStatus;
+  origin?: RouteOrigin;
+  ownership?: RouteOwnership;
+  provenance?: RouteProvenance;
+  /** A waypoint/recorded trace distance is never a routed distance. */
+  provisionalDistanceKm?: number;
+  distanceStatus?: RouteDistanceStatus;
   distanceKm: number;
   /** Canonical instants. The label fields remain only for v1/render compatibility. */
   departureAt?: string;
@@ -277,6 +289,8 @@ export type RouteRecord = {
   roadEvidenceStatus: RoadEvidenceStatus;
   revision: number;
   provenance: RouteProvenance;
+  /** Geodesic/trace distance retained separately from any routed distance. */
+  provisionalDistanceKm?: number;
   analysis?: RouteAnalysisSnapshot;
 };
 

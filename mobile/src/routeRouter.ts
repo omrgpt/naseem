@@ -14,6 +14,10 @@ const MAX_ROUTED_DISTANCE_KM = 160;
 const MAX_ENDPOINT_OFFSET_KM = 2;
 const MAX_DISTANCE_METADATA_ERROR_RATIO = 0.01;
 const MAX_DISTANCE_METADATA_ERROR_M = 50;
+const MAX_DURATION_METADATA_ERROR_RATIO = 0.05;
+const MAX_DURATION_METADATA_ERROR_S = 30;
+const MAX_GEOMETRY_DISTANCE_ERROR_RATIO = 0.1;
+const MAX_GEOMETRY_DISTANCE_ERROR_M = 2_500;
 const ROUTER_CACHE_TTL_MS = 5 * 60_000;
 const ROUTER_CACHE_MAX_ENTRIES = 64;
 const ROUTER_CALLS_PER_MINUTE = 20;
@@ -26,9 +30,11 @@ type RouterResponse = {
 
 type RouterRoute = {
   distance?: unknown;
+  duration?: unknown;
   geometry?: unknown;
   legs?: unknown;
 };
+type ParsedLegs = { distances: number[]; durations: number[] };
 
 export type RouteMatchFailureCode = 'tooFewWaypoints' | 'tooManyWaypoints' | 'outsideCoverage' | 'routerUnavailable' | 'noRoute' | 'invalidResponse' | 'rateLimited';
 export type RouteGeometryResolution = { ok: true; route: RoutePlan } | { ok: false; reason: RouteMatchFailureCode };
@@ -80,21 +86,21 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
     }
     if (!isRecord(payload)) return { ok: false, reason: 'invalidResponse' };
     const routerPayload = payload as RouterResponse;
-    const result = Array.isArray(routerPayload.routes) ? routerPayload.routes[0] : undefined;
+    const result = Array.isArray(routerPayload.routes) && routerPayload.routes.length === 1 ? routerPayload.routes[0] : undefined;
     if (routerPayload.code !== 'Ok' || !isRecord(result)) return { ok: false, reason: routerPayload.code === 'NoRoute' ? 'noRoute' : 'invalidResponse' };
     const routeResult = result as RouterRoute;
-    const geometryResult = isRecord(routeResult.geometry) ? routeResult.geometry : undefined;
-    const geometry = parseGeometry(geometryResult?.coordinates);
+    const geometry = parseGeometry(routeResult.geometry);
     const legs = parseLegDistances(routeResult.legs, route.points.length - 1);
     const totalDistanceM = finiteNumber(routeResult.distance);
+    const totalDurationS = finiteNumber(routeResult.duration);
     const snapped = parseSnappedWaypoints(routerPayload.waypoints, route.points);
-    if (!geometry || !legs || totalDistanceM === null || totalDistanceM <= 0 || totalDistanceM / 1_000 > MAX_ROUTED_DISTANCE_KM || !snapped.ok) return { ok: false, reason: 'invalidResponse' };
+    if (!geometry || !legs || totalDistanceM === null || totalDistanceM <= 0 || totalDistanceM / 1_000 > MAX_ROUTED_DISTANCE_KM || totalDurationS === null || totalDurationS <= 0 || !snapped.ok) return { ok: false, reason: 'invalidResponse' };
     if (!endpointsCorrespond(geometry, route.points, snapped.coordinates)) return { ok: false, reason: 'invalidResponse' };
 
     const geometryDistancesKm = cumulativeDistances(geometry);
     const geometryDistanceKm = geometryDistancesKm.at(-1) ?? 0;
     const routedDistanceKm = totalDistanceM / 1_000;
-    if (!isNondecreasing(geometryDistancesKm) || geometryDistanceKm <= 0 || routedDistanceKm < geometryDistanceKm || !distanceMetadataMatches(totalDistanceM, legs)) return { ok: false, reason: 'invalidResponse' };
+    if (!isNondecreasing(geometryDistancesKm) || geometryDistanceKm <= 0 || !geometryDistanceMatches(totalDistanceM, geometryDistanceKm) || !distanceMetadataMatches(totalDistanceM, legs.distances) || !durationMetadataMatches(totalDurationS, legs.durations)) return { ok: false, reason: 'invalidResponse' };
     geometryDistancesKm[geometryDistancesKm.length - 1] = routedDistanceKm;
     if (!isNondecreasing(geometryDistancesKm)) return { ok: false, reason: 'invalidResponse' };
 
@@ -103,7 +109,7 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
     const points = anchoredPoints.map((point, index) => {
       const next = index < anchoredPoints.length - 1 ? anchoredPoints[index + 1] : anchoredPoints[index - 1] ?? point;
       const distanceKm = index === 0 ? 0 : cumulativeM / 1_000;
-      if (index < legs.length) cumulativeM += legs[index];
+      if (index < legs.distances.length) cumulativeM += legs.distances[index];
       return { ...point, distanceKm, headingDegrees: bearingDegrees(point, next) };
     });
     // The router's total is authoritative for the road-following trace. Keep
@@ -115,6 +121,9 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
         geometry,
         geometryDistancesKm,
         geometrySource: 'OpenStreetMap routed-bike preview · suitability audit pending',
+        geometryKind: 'road_matched',
+        geometryStatus: 'ready',
+        distanceStatus: 'authoritative',
         distanceKm: totalDistanceM / 1_000,
       } };
   } catch {
@@ -125,28 +134,32 @@ async function resolveRoadGeometryUncached(route: RoutePlan): Promise<RouteGeome
 }
 
 function parseGeometry(value: unknown): Coordinate[] | null {
-  if (!Array.isArray(value) || value.length < 2) return null;
-  const geometry = value.map(toCoordinate);
+  if (!isRecord(value) || (value.type !== undefined && value.type !== 'LineString') || !Array.isArray(value.coordinates) || value.coordinates.length < 2 || value.coordinates.length > MAX_GEOMETRY_POINTS * 10) return null;
+  const geometry = value.coordinates.map(toCoordinate);
   return geometry.every((point): point is Coordinate => point !== null) ? geometry : null;
 }
 
-function parseLegDistances(value: unknown, expectedLength: number): number[] | null {
+function parseLegDistances(value: unknown, expectedLength: number): ParsedLegs | null {
   if (!Array.isArray(value) || value.length !== expectedLength) return null;
-  const distances = value.map((leg) => isRecord(leg) ? finiteNumber(leg.distance) : null);
-  return distances.every((distance): distance is number => distance !== null && distance > 0) ? distances : null;
+  const parsed = value.map((leg) => {
+    if (!isRecord(leg)) return null;
+    const distance = finiteNumber(leg.distance);
+    const duration = finiteNumber(leg.duration);
+    return distance !== null && distance > 0 && duration !== null && duration > 0 ? { distance, duration } : null;
+  });
+  return parsed.every((leg): leg is { distance: number; duration: number } => leg !== null)
+    ? { distances: parsed.map((leg) => leg.distance), durations: parsed.map((leg) => leg.duration) }
+    : null;
 }
 
 function parseSnappedWaypoints(value: unknown, requested: Coordinate[]) {
-  if (value === undefined) return { ok: true as const, coordinates: undefined };
   if (!Array.isArray(value) || value.length !== requested.length) return { ok: false as const };
   const coordinates = value.map((waypoint, index) => {
     if (!isRecord(waypoint)) return null;
     const coordinate = toCoordinate(waypoint.location);
     if (!coordinate || coordinateDistanceKm(coordinate, requested[index]) > MAX_ENDPOINT_OFFSET_KM) return null;
-    if (waypoint.distance !== undefined) {
-      const distance = finiteNumber(waypoint.distance);
-      if (distance === null || distance < 0) return null;
-    }
+    const distance = finiteNumber(waypoint.distance);
+    if (distance === null || distance < 0 || distance / 1_000 > MAX_ENDPOINT_OFFSET_KM) return null;
     return coordinate;
   });
   return coordinates.every((point): point is Coordinate => point !== null)
@@ -169,6 +182,19 @@ function distanceMetadataMatches(totalDistanceM: number, legs: number[]) {
   if (!Number.isFinite(legsTotalM)) return false;
   const toleranceM = Math.max(MAX_DISTANCE_METADATA_ERROR_M, totalDistanceM * MAX_DISTANCE_METADATA_ERROR_RATIO);
   return Math.abs(totalDistanceM - legsTotalM) <= toleranceM;
+}
+
+function durationMetadataMatches(totalDurationS: number, durations: number[]) {
+  const legsTotalS = durations.reduce((total, duration) => total + duration, 0);
+  if (!Number.isFinite(legsTotalS)) return false;
+  const toleranceS = Math.max(MAX_DURATION_METADATA_ERROR_S, totalDurationS * MAX_DURATION_METADATA_ERROR_RATIO);
+  return Math.abs(totalDurationS - legsTotalS) <= toleranceS;
+}
+
+function geometryDistanceMatches(totalDistanceM: number, geometryDistanceKm: number) {
+  const geometryDistanceM = geometryDistanceKm * 1_000;
+  const toleranceM = Math.max(MAX_GEOMETRY_DISTANCE_ERROR_M, totalDistanceM * MAX_GEOMETRY_DISTANCE_ERROR_RATIO);
+  return Math.abs(totalDistanceM - geometryDistanceM) <= toleranceM;
 }
 
 function isNondecreasing(values: number[]) {
@@ -293,9 +319,13 @@ function rebaseCachedGeometry(cached: RoutePlan, route: RoutePlan): RoutePlan {
       const snapped = cached.points[index];
       return snapped ? { ...point, latitude: snapped.latitude, longitude: snapped.longitude, distanceKm: snapped.distanceKm, headingDegrees: snapped.headingDegrees } : point;
     }),
-    geometry: cached.geometry,
-    geometryDistancesKm: cached.geometryDistancesKm,
+    ...(cached.geometry ? { geometry: cached.geometry.map((point) => ({ ...point })) } : {}),
+    ...(cached.geometryDistancesKm ? { geometryDistancesKm: [...cached.geometryDistancesKm] } : {}),
     geometrySource: cached.geometrySource,
+    geometryKind: 'road_matched',
+    geometryStatus: 'ready',
+    distanceStatus: 'authoritative',
+    ...(route.provisionalDistanceKm !== undefined ? { provisionalDistanceKm: route.provisionalDistanceKm } : {}),
     distanceKm: cached.distanceKm,
   };
 }
