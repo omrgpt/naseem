@@ -40,7 +40,6 @@ import {
   type SettingsTheme,
 } from "./src/SettingsScreen";
 import { UiDirectionLab } from "./src/UiDirectionLab";
-import { Icon, type IconName } from "./src/Icon";
 import type { Language } from "./src/i18n";
 import { copy, directionForLanguage, localeForLanguage } from "./src/i18n";
 import {
@@ -59,28 +58,40 @@ import {
   draftRouteFromCoordinates,
   parseGpxDetailed,
   routeFromCoordinates,
+  plannerValidationMessage,
+  validatePlannerEndpoints,
   validateRouteCoordinates,
 } from "./src/routeBuilder";
 import {
   beginRouteMatching,
   routeMatchingFailed,
   routeMatchingSucceeded,
+  reverseRoute,
   savePersonalRoute,
   DEFAULT_WAYPOINT_TRACE_LIVE_RIDE_POLICY,
 } from "./src/routeLifecycle";
 import {
   routeAnalysisKey,
   routePlanFromRecord,
+  routeRecordHasAuthoritativeGeometry,
   routeRecordFromPlan,
 } from "./src/routeRepository";
 import { resolveRoadGeometryDetailed } from "./src/routeRouter";
+import { getStravaDisclosure } from "./src/api";
 import {
-  COASTAL_LOOP,
   NBH_FAMILY,
   NBH_LOOP,
   ROUTE_ALTERNATIVES,
 } from "./src/seed";
-import { getBahrainConditions, type BahrainConditions } from "./src/weather";
+import {
+  beginWeatherRefresh,
+  completeWeatherRefresh,
+  createWeatherRefreshState,
+  failWeatherRefresh,
+  getBahrainConditions,
+  type BahrainConditions,
+  type WeatherRefreshState,
+} from "./src/weather";
 import type {
   Coordinate,
   RoutePlan,
@@ -90,6 +101,8 @@ import type {
 import { DARK, LIGHT, type Palette } from "./src/designTokens";
 import {
   DEFAULT_APP_PREFERENCES,
+  getPrivacyCenterCopy,
+  STRAVA_CONNECTION_STATE,
   loadAppPreferences,
   saveAppPreferences,
   type AppPreferences,
@@ -118,8 +131,12 @@ import type {
   RouteCollection,
   RouteSurfaceItem,
 } from "./src/screenTypes";
-import { routeIsNavigable, screenText } from "./src/screenTypes";
-import { useLiveRideSession } from "./src/useLiveRideSession";
+import { screenText } from "./src/screenTypes";
+import {
+  isBrowserLocationAvailable,
+  permissionStateFromResult,
+  useLiveRideSession,
+} from "./src/useLiveRideSession";
 import {
   parseActivities,
   serializeActivities,
@@ -136,14 +153,18 @@ import {
   FONT_ARABIC_BOLD,
   FONT_ARABIC_MEDIUM,
   FONT_ARABIC_REGULAR,
-  FONT_ARABIC_SEMIBOLD,
   FONT_BOLD,
   FONT_EXTRABOLD,
   FONT_MEDIUM,
   FONT_REGULAR,
-  FONT_SEMIBOLD,
 } from "./src/fonts";
 import type { ActivityDraft } from "./src/domain";
+import {
+  AccessibleHeading,
+  AccessibleLandmark,
+  AccessibleNavigation,
+  SkipToContent,
+} from "./src/UiPatterns";
 
 type Tab = "home" | "plan" | "ride" | "you";
 type RouteStatus =
@@ -214,10 +235,40 @@ const SMART_LOOP_TEMPLATES = [
 
 function shouldAutoMatchRouteReview(record: RouteRecord) {
   return (
-    record.geometry.kind === "waypoint_trace" &&
-    (record.geometry.status === "draft" ||
-      record.geometry.status === "unavailable")
+    (record.origin === "pilot" &&
+      record.geometry.kind === "recorded_trace" &&
+      (record.geometry.status === "ready" ||
+        record.geometry.status === "draft" ||
+        record.geometry.status === "unavailable")) ||
+    (record.geometry.kind === "waypoint_trace" &&
+      (record.geometry.status === "draft" ||
+        record.geometry.status === "unavailable"))
   );
+}
+
+function downloadJsonInBrowser(payload: string, filename: string) {
+  if (
+    typeof window === "undefined" ||
+    typeof document === "undefined" ||
+    typeof Blob === "undefined" ||
+    typeof URL === "undefined" ||
+    !document.body
+  )
+    return false;
+  try {
+    const blob = new Blob([payload], { type: "application/json" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export default function App() {
@@ -301,9 +352,13 @@ export default function App() {
   const [generatedReview, setGeneratedReview] = useState<RoutePlan | null>(
     null,
   );
+  const [loopGenerationFailed, setLoopGenerationFailed] = useState(false);
   const [routeMessage, setRouteMessage] = useState("");
   const [webAlert, setWebAlert] = useState<WebAlertState | null>(null);
   const [conditions, setConditions] = useState<BahrainConditions | null>(null);
+  const [weatherRefresh, setWeatherRefresh] = useState<WeatherRefreshState>(
+    () => createWeatherRefreshState(),
+  );
   const [refreshing, setRefreshing] = useState(true);
   const [departureOffset, setDepartureOffset] = useState(0);
   const [detailNameDraft, setDetailNameDraft] = useState("");
@@ -317,6 +372,7 @@ export default function App() {
   const matchingToken = useRef(0);
   const generationIndex = useRef(0);
   const lastGeneratedAt = useRef(0);
+  const dataDeletionGeneration = useRef(0);
   const activityWriteInFlight = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   const t = copy[language];
@@ -448,16 +504,41 @@ export default function App() {
     [],
   );
   const allRecords = useMemo(() => {
-    const byId = new Map<string, RouteRecord>();
+    const byIdentity = new Map<string, RouteRecord>();
     [
       ...catalogRecords,
       ...storedRouteRecords,
       ...Object.values(workingRecords),
-    ].forEach((route) => byId.set(route.id, route));
-    return [...byId.values()];
+    ].forEach((route) => {
+      const key = routeRecordIdentityKey(route);
+      const existing = byIdentity.get(key);
+      if (!existing || route.revision >= existing.revision)
+        byIdentity.set(key, route);
+    });
+    return [...byIdentity.values()];
   }, [catalogRecords, storedRouteRecords, workingRecords]);
-  const recordById = (id: string | null | undefined) =>
-    id ? (allRecords.find((route) => route.id === id) ?? null) : null;
+  const recordById = (id: string | null | undefined) => {
+    if (!id) return null;
+    return (
+      allRecords
+        .filter((route) => route.id === id)
+        .sort((first, second) => second.revision - first.revision)[0] ?? null
+    );
+  };
+  const recordForPlan = (plan: RoutePlan | null | undefined) => {
+    if (!plan) return null;
+    const candidates = allRecords.filter((record) =>
+      routeRecordMatchesPlanIdentity(record, plan),
+    );
+    const stateMatches = candidates.filter((record) =>
+      routeRecordMatchesPlanState(record, plan),
+    );
+    return (
+      stateMatches.sort((first, second) => second.revision - first.revision)[0] ??
+      candidates.sort((first, second) => second.revision - first.revision)[0] ??
+      (hasExplicitPlanIdentity(plan) ? null : recordById(plan.id))
+    );
+  };
   const selectedRecord = recordById(selectedRouteId);
   const homeRecord = selectedRecord;
   const confirmedRecord = recordById(confirmedRouteId);
@@ -490,12 +571,14 @@ export default function App() {
   }, []);
   useEffect(() => {
     let active = true;
+    const deletionGeneration = dataDeletionGeneration.current;
     void Promise.all([
       AsyncStorage.getItem(ROUTE_STORAGE_V2_KEY),
       AsyncStorage.getItem(ROUTE_STORAGE_V1_KEY),
     ])
       .then(async ([v2, v1]) => {
-        if (!active) return;
+        if (!active || deletionGeneration !== dataDeletionGeneration.current)
+          return;
         const readOptions = {
           catalogRouteIds: ROUTE_ALTERNATIVES.map((route) => route.id),
           catalogSources: ["Bahrain Tourism"],
@@ -530,7 +613,7 @@ export default function App() {
             ROUTE_STORAGE_V2_KEY,
             serializeStoredRouteRecords(loaded.routes),
           );
-        if (active) {
+        if (active && deletionGeneration === dataDeletionGeneration.current) {
           setRoutesHydrated(true);
           setRouteStorageReady(true);
         }
@@ -554,9 +637,11 @@ export default function App() {
   }, [routeStorageReady, routesHydrated, storedRouteRecords]);
   useEffect(() => {
     let active = true;
+    const deletionGeneration = dataDeletionGeneration.current;
     void AsyncStorage.getItem(ACTIVITY_STORAGE_KEY)
       .then((raw) => {
-        if (!active) return;
+        if (!active || deletionGeneration !== dataDeletionGeneration.current)
+          return;
         if (raw && !isValidActivityStorage(raw)) {
           setActivitiesHydrated(true);
           setActivityStorageReady(false);
@@ -580,9 +665,14 @@ export default function App() {
   }, []);
   useEffect(() => {
     let active = true;
-    void AsyncStorage.getItem(ACTIVITY_PENDING_STORAGE_KEY)
-      .then((raw) => {
+    const hydratePendingDraft = async (generation: number): Promise<void> => {
+      try {
+        const raw = await AsyncStorage.getItem(ACTIVITY_PENDING_STORAGE_KEY);
         if (!active) return;
+        if (generation !== dataDeletionGeneration.current) {
+          void hydratePendingDraft(dataDeletionGeneration.current);
+          return;
+        }
         const pending = parseActivities(raw).find(
           (activity) =>
             activity.completionState === "draft" ||
@@ -590,10 +680,16 @@ export default function App() {
         );
         if (pending) setCompletionDraftView(pending);
         setPendingDraftHydrated(true);
-      })
-      .catch(() => {
-        if (active) setPendingDraftHydrated(true);
-      });
+      } catch {
+        if (!active) return;
+        if (generation !== dataDeletionGeneration.current) {
+          void hydratePendingDraft(dataDeletionGeneration.current);
+          return;
+        }
+        setPendingDraftHydrated(true);
+      }
+    };
+    void hydratePendingDraft(dataDeletionGeneration.current);
     return () => {
       active = false;
     };
@@ -644,21 +740,34 @@ export default function App() {
     commitPreferences({ language: next });
   const updateTheme = (next: "light" | "dark") =>
     commitPreferences({ theme: next });
-  const openPrivacy = () => showAppAlert(t.privacySources, t.privacyCopy);
-  const requestLocationPermission = async () => {
+  const openPrivacy = () =>
+    showAppAlert(
+      getPrivacyCenterCopy(language).title,
+      privacyCenterMessage(getPrivacyCenterCopy(language)),
+      [{ text: t.done, style: "cancel" }],
+    );
+  const requestLocationPermission = async (): Promise<PermissionStatus> => {
+    setLocationPermission("pending");
+    if (Platform.OS === "web" && !isBrowserLocationAvailable()) {
+      setLocationPermission("unavailable");
+      return "unavailable";
+    }
     try {
       const result = await Location.requestForegroundPermissionsAsync();
-      const status =
-        result.status === "granted"
-          ? "granted"
-          : result.status === "denied"
-            ? "denied"
-            : "undetermined";
+      const status = permissionStateFromResult(
+        result,
+        Platform.OS,
+        Platform.OS !== "web" || isBrowserLocationAvailable(),
+      );
       setLocationPermission(status);
-      if (status === "denied")
+      if (status === "denied" && Platform.OS !== "web")
         await Linking.openSettings().catch(() => undefined);
+      return status;
     } catch {
-      setLocationPermission("undetermined");
+      const status: PermissionStatus =
+        Platform.OS === "web" ? "unavailable" : "undetermined";
+      setLocationPermission(status);
+      return status;
     }
   };
   const exportData = async () => {
@@ -673,38 +782,69 @@ export default function App() {
       null,
       2,
     );
-    if (!FileSystem.cacheDirectory || !(await Sharing.isAvailableAsync())) {
+    if (Platform.OS === "web") {
+      const downloaded = downloadJsonInBrowser(
+        payload,
+        `naseem-export-${Date.now()}.json`,
+      );
       showAppAlert(
-        t.privacySources,
-        uiText(
-          "exportUnavailable",
-          "Export is not available on this device right now.",
-        ),
+        t.exportRide,
+        downloaded
+          ? t.exportedRide
+          : uiText(
+              "exportUnavailable",
+              "Export is not available on this device right now.",
+            ),
       );
       return;
     }
-    const uri = `${FileSystem.cacheDirectory}naseem-export-${Date.now()}.json`;
-    await FileSystem.writeAsStringAsync(uri, payload, {
-      encoding: FileSystem.EncodingType.UTF8,
-    });
-    await Sharing.shareAsync(uri, {
-      mimeType: "application/json",
-      dialogTitle:
-        language === "ar" ? "تصدير بيانات نسيم" : "Export Naseem data",
-    });
+    try {
+      if (!FileSystem.cacheDirectory || !(await Sharing.isAvailableAsync())) {
+        showAppAlert(
+          t.exportRide,
+          uiText(
+            "exportUnavailable",
+            "Export is not available on this device right now.",
+          ),
+        );
+        return;
+      }
+      const uri = `${FileSystem.cacheDirectory}naseem-export-${Date.now()}.json`;
+      await FileSystem.writeAsStringAsync(uri, payload, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      await Sharing.shareAsync(uri, {
+        mimeType: "application/json",
+        dialogTitle:
+          language === "ar" ? "تصدير بيانات نسيم" : "Export Naseem data",
+      });
+    } catch {
+      showAppAlert(t.exportRide, t.saveFailed);
+    }
   };
   const deleteSavedRoutes = () => {
+    dataDeletionGeneration.current += 1;
+    matchingToken.current += 1;
     setRideStartIntent(null);
     setStoredRouteRecords([]);
     setStoredActivities([]);
+    setRoutesHydrated(true);
+    setActivitiesHydrated(true);
     setRouteStorageReady(true);
     setActivityStorageReady(true);
     setSelectedRouteId(null);
     setConfirmedRouteId(null);
     setDetailRouteId(null);
+    setCompletionDraftView((current) =>
+      current?.completionState === "draft" ||
+      current?.completionState === "save_failed"
+        ? current
+        : null,
+    );
     void Promise.all([
       AsyncStorage.removeItem(ROUTE_STORAGE_V1_KEY),
-      AsyncStorage.removeItem(ACTIVITY_PENDING_STORAGE_KEY),
+      AsyncStorage.removeItem(ROUTE_STORAGE_V2_KEY),
+      AsyncStorage.removeItem(ACTIVITY_STORAGE_KEY),
     ]).catch(() => undefined);
     setRouteMessage(
       uiText("deleteDone", "Saved personal routes removed from this device."),
@@ -739,6 +879,12 @@ export default function App() {
     setLanguage(next.language);
     setTheme(next.theme);
     setEditingOnboarding(false);
+    setTab("home");
+    if (!preferences.onboardingComplete && !editingOnboarding) {
+      setSelectedRouteId(NBH_LOOP.id);
+      setConfirmedRouteId(null);
+      setDetailRouteId(null);
+    }
     await saveAppPreferences(next);
   };
 
@@ -836,28 +982,43 @@ export default function App() {
     ],
   );
 
-  const refresh = async () => {
+  const refresh = async (forceRefresh = false, announceFailure = false) => {
     const weatherPoint = homeRecord?.points[0] ?? BAHRAIN_CENTER;
+    const loading = beginWeatherRefresh(weatherRefresh);
+    setWeatherRefresh(loading);
     setRefreshing(true);
     try {
-      setConditions(
-        await getBahrainConditions(
-          weatherPoint.latitude,
-          weatherPoint.longitude,
-        ),
+      const nextConditions = await getBahrainConditions(
+        weatherPoint.latitude,
+        weatherPoint.longitude,
+        forceRefresh ? { forceRefresh: true } : {},
       );
+      const next = completeWeatherRefresh(loading, nextConditions);
+      setWeatherRefresh(next);
+      setConditions(next.conditions ?? nextConditions);
+      if (announceFailure && next.status === "error")
+        showAppAlert(t.refresh, t.forecastFallback);
     } catch {
-      setConditions(null);
+      const next = failWeatherRefresh(loading, t.forecastFallback);
+      setWeatherRefresh(next);
+      setConditions(next.conditions);
+      if (announceFailure) showAppAlert(t.refresh, t.forecastFallback);
     } finally {
       setRefreshing(false);
     }
   };
+  const weatherPointKey = homeRecord?.points[0]
+    ? `${homeRecord.id}:${homeRecord.revision}:${homeRecord.points[0].latitude}:${homeRecord.points[0].longitude}`
+    : "bahrain-center";
   useEffect(() => {
-    void refresh();
-  }, [homeRecord?.id]);
+    void refresh(false, false);
+  }, [weatherPointKey]);
 
   const updateWorkingRecord = (record: RouteRecord) =>
-    setWorkingRecords((current) => ({ ...current, [record.id]: record }));
+    setWorkingRecords((current) => ({
+      ...current,
+      [routeRecordIdentityKey(record)]: record,
+    }));
   const matchRecord = async (
     record: RouteRecord,
   ): Promise<RouteRecord | null> => {
@@ -922,7 +1083,22 @@ export default function App() {
     start: BuilderRouteState["start"],
     destination: BuilderRouteState["destination"],
   ) => {
+    const token = ++matchingToken.current;
     if (!start || !destination) return;
+    const endpointError = validatePlannerEndpoints(start, destination);
+    if (endpointError) {
+      const message = plannerValidationMessage(endpointError, language);
+      setRouteMessage(message);
+      setBuilder((current) => ({
+        ...current,
+        status: "failed",
+        start,
+        destination,
+        route: null,
+        error: message,
+      }));
+      return;
+    }
     const plan = routeFromCoordinates(
       `planned-${Date.now()}`,
       `${start.name} → ${destination.name}`,
@@ -967,7 +1143,6 @@ export default function App() {
       destination,
       route: viewForRecord(matching.route, language),
     });
-    const token = ++matchingToken.current;
     const result = await resolveRoadGeometryDetailed(plan);
     if (token !== matchingToken.current) return;
     if (result.ok) {
@@ -1018,8 +1193,24 @@ export default function App() {
     const nextStart = field === "start" ? nextPoint : builder.start;
     const nextDestination =
       field === "destination" ? nextPoint : builder.destination;
+    const endpointError = validatePlannerEndpoints(nextStart, nextDestination);
     if (field === "start") setStartText(nextPoint.name);
     else setDestinationText(nextPoint.name);
+    if (endpointError === "sameEndpoints") {
+      matchingToken.current += 1;
+      const message = plannerValidationMessage(endpointError, language);
+      setRouteMessage(message);
+      setBuilder({
+        status: "failed",
+        start: nextStart,
+        destination: nextDestination,
+        route: null,
+        error: message,
+      });
+      setActiveField(field);
+      return;
+    }
+    setRouteMessage("");
     setActiveField(
       field === "start" && !nextDestination ? "destination" : null,
     );
@@ -1044,14 +1235,17 @@ export default function App() {
     if (field === "start") setStartText(value);
     else setDestinationText(value);
     matchingToken.current += 1;
-    const start = field === "start" ? null : builder.start;
-    const destination = field === "destination" ? null : builder.destination;
+    const start =
+      field === "start" && !value.trim() ? null : builder.start;
+    const destination =
+      field === "destination" && !value.trim() ? null : builder.destination;
     setBuilder({
       status: start ? "start-selected" : "empty",
       start,
       destination,
       route: null,
     });
+    setRouteMessage("");
     setActiveField(field);
   };
   const mapPlannerPress = (coordinate: Coordinate) => {
@@ -1071,10 +1265,40 @@ export default function App() {
     );
   };
   const useCurrentLocation = async (field: "start" | "destination") => {
+    const reportLocationFailure = (message: string) => {
+      setRouteMessage(message);
+      showAppAlert(t.currentLocation, message, [
+        { text: t.done, style: "cancel" },
+      ]);
+    };
+    setLocationPermission("pending");
+    if (Platform.OS === "web" && !isBrowserLocationAvailable()) {
+      setLocationPermission("unavailable");
+      reportLocationFailure(
+        uiText(
+          "locationUnavailable",
+          "Current location is unavailable. Choose a point on the map or search again.",
+        ),
+      );
+      return;
+    }
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== "granted") {
-        setRouteMessage(t.permissionDenied);
+      const permissionStatus = permissionStateFromResult(
+        permission,
+        Platform.OS,
+        Platform.OS !== "web" || isBrowserLocationAvailable(),
+      );
+      setLocationPermission(permissionStatus);
+      if (permissionStatus !== "granted") {
+        reportLocationFailure(
+          permissionStatus === "unavailable"
+            ? uiText(
+                "locationUnavailable",
+                "Current location is unavailable. Choose a point on the map or search again.",
+              )
+            : t.permissionDenied,
+        );
         return;
       }
       const current = await Location.getCurrentPositionAsync({
@@ -1092,8 +1316,10 @@ export default function App() {
           field === "start" ? "Current location" : "Current destination",
         ),
       );
+      setRouteMessage("");
     } catch {
-      setRouteMessage(
+      setLocationPermission(Platform.OS === "web" ? "unavailable" : "undetermined");
+      reportLocationFailure(
         uiText(
           "locationUnavailable",
           "Current location is unavailable. Choose a point on the map or search again.",
@@ -1102,7 +1328,7 @@ export default function App() {
     }
   };
   const beginConnectFromLocation = (route: RouteRecord | null) => {
-    if (!route || !routeIsNavigable(viewForRecord(route, language))) {
+    if (!route || !routeRecordHasAuthoritativeGeometry(route)) {
       setRouteMessage(
         uiText(
           "previewOnlyRideCopy",
@@ -1130,7 +1356,7 @@ export default function App() {
     beginConnectFromLocation(confirmedRecord);
   const startNbhAtEntry = () => {
     const nbh = recordById(NBH_LOOP.id);
-    if (!nbh || !routeIsNavigable(viewForRecord(nbh, language))) {
+    if (!nbh || !routeRecordHasAuthoritativeGeometry(nbh)) {
       setRouteMessage(
         uiText(
           "previewOnlyRideCopy",
@@ -1157,12 +1383,15 @@ export default function App() {
     if (builder.start && builder.destination)
       void matchPlanner(builder.start, builder.destination);
   };
-  const editPlannerPoints = () =>
+  const editPlannerPoints = () => {
+    matchingToken.current += 1;
     setBuilder((current) => ({
       ...current,
       status: current.start ? "start-selected" : "empty",
       route: null,
+      error: undefined,
     }));
+  };
   const reversePlanner = () => {
     if (!builder.start || !builder.destination) return;
     const start = builder.destination;
@@ -1186,12 +1415,14 @@ export default function App() {
     [language, manualPoints],
   );
   const openManual = () => {
+    matchingToken.current += 1;
     setManualMode(true);
     setManualPoints([]);
     setManualRedo([]);
     setRouteMessage("");
   };
   const cancelManual = () => {
+    matchingToken.current += 1;
     setManualMode(false);
     setManualPoints([]);
     setManualRedo([]);
@@ -1217,10 +1448,72 @@ export default function App() {
     setManualMode(false);
     setRouteMessage(t.straightLineWarning);
   };
-  const removeManualPoint = (index: number) =>
+  const manualRecordForDecision = () =>
+    manualRoute
+      ? routeRecordFromPlan(manualRoute, {
+          origin: "drawn",
+          ownership: "personal",
+          geometry: {
+            kind: "recorded_trace",
+            status: "ready",
+            source: "Drawn on device",
+          },
+          roadEvidenceStatus: "unknown",
+          provenance: {
+            source: "Drawn on device",
+            createdAt: new Date().toISOString(),
+          },
+          revision: 1,
+        })
+      : null;
+  const useManualRoute = () => {
+    const record = manualRecordForDecision();
+    if (!record) {
+      setRouteMessage(t.drawMore);
+      return;
+    }
+    updateWorkingRecord(record);
+    setManualMode(false);
+    setRouteMessage("");
+    setSelectedRouteId(record.id);
+    setConfirmedRouteId(null);
+    setDetailRouteId(record.id);
+    setTab("plan");
+  };
+  const saveManualRoute = () => {
+    const record = manualRecordForDecision();
+    if (!record) {
+      setRouteMessage(t.drawMore);
+      return;
+    }
+    const saved = savePersonalRoute(record);
+    if ("route" in saved) {
+      saveRecord(saved.route);
+      setManualMode(false);
+      setRouteMessage(t.routeSaved);
+      setSelectedRouteId(saved.route.id);
+      setConfirmedRouteId(null);
+      setDetailRouteId(saved.route.id);
+      setTab("plan");
+    }
+  };
+  const editManualRoute = () => {
+    setManualMode(true);
+    setRouteMessage("");
+    setTab("plan");
+  };
+  const discardManualRoute = () => {
+    setManualMode(false);
+    setManualPoints([]);
+    setManualRedo([]);
+    setRouteMessage("");
+  };
+  const removeManualPoint = (index: number) => {
+    setManualRedo([]);
     setManualPoints((current) =>
       current.filter((_, currentIndex) => currentIndex !== index),
     );
+  };
   const moveManualPoint = (index: number, direction: -1 | 1) => {
     setManualRedo([]);
     setManualPoints((current) => {
@@ -1322,7 +1615,7 @@ export default function App() {
   const useImport = () => {
     if (!importReview) return;
     const record =
-      recordById(importReview.id) ??
+      recordForPlan(importReview) ??
       recordFromView(
         importReview,
         "gpx",
@@ -1342,7 +1635,10 @@ export default function App() {
     }
   };
   const generateLoop = async () => {
+    setLoopGenerationFailed(false);
     if (!builder.start) {
+      setLoopGenerationFailed(true);
+      setActiveField("start");
       setRouteMessage(
         uiText("generatorNeedsStart", "Add a Start before generating a loop."),
       );
@@ -1353,6 +1649,7 @@ export default function App() {
       ? kilometresFromDisplayValue(enteredTarget, preferences.distanceUnit)
       : Number.NaN;
     if (!Number.isFinite(target) || target < 5 || target > 80) {
+      setLoopGenerationFailed(true);
       setRouteMessage(
         uiText(
           "generatorTargetError",
@@ -1364,6 +1661,7 @@ export default function App() {
       return;
     }
     if (Date.now() - lastGeneratedAt.current < GENERATION_COOLDOWN_MS) {
+      setLoopGenerationFailed(true);
       setRouteMessage(
         uiText(
           "generationLimited",
@@ -1393,6 +1691,7 @@ export default function App() {
       "Generated route candidate",
     );
     if (!candidate) {
+      setLoopGenerationFailed(true);
       setRouteMessage(
         uiText(
           "generatedUnavailable",
@@ -1419,6 +1718,7 @@ export default function App() {
       matched.geometry.kind !== "road_matched" ||
       matched.geometry.status !== "ready"
     ) {
+      setLoopGenerationFailed(true);
       setRouteMessage(
         uiText(
           "generatedUnavailable",
@@ -1433,12 +1733,17 @@ export default function App() {
     };
     updateWorkingRecord({ ...matched, nameAr: template.nameAr });
     setGeneratedReview(generated);
+    setLoopGenerationFailed(false);
     setRouteMessage("");
+  };
+  const retryLoopGeneration = () => {
+    setLoopGenerationFailed(false);
+    void generateLoop();
   };
   const useGenerated = () => {
     if (!generatedReview) return;
     const record =
-      recordById(generatedReview.id) ??
+      recordForPlan(generatedReview) ??
       recordFromView(
         generatedReview,
         "generated",
@@ -1452,20 +1757,26 @@ export default function App() {
       setRecordingOnlyRide(false);
       saveRecord(saved.route);
       setSelectedRouteId(saved.route.id);
-      setConfirmedRouteId(saved.route.id);
+      setConfirmedRouteId(null);
+      setDetailRouteId(saved.route.id);
       setGeneratedReview(null);
-      setTab("ride");
+      setTab("plan");
     }
   };
 
   const openRouteDetail = (route: RoutePlan) => {
+    const record = recordForPlan(route);
+    if (!record) return;
     setRideStartIntent(null);
     setRecordingOnlyRide(false);
-    if (confirmedRouteId !== route.id) setConfirmedRouteId(null);
-    setSelectedRouteId(route.id);
-    setDetailRouteId(route.id);
+    if (
+      !confirmedRecord ||
+      routeRecordIdentityKey(confirmedRecord) !== routeRecordIdentityKey(record)
+    )
+      setConfirmedRouteId(null);
+    setSelectedRouteId(record.id);
+    setDetailRouteId(record.id);
     setTab("plan");
-    const record = recordById(route.id);
     if (record && shouldAutoMatchRouteReview(record))
       void matchRecord(record);
   };
@@ -1474,6 +1785,7 @@ export default function App() {
   };
   const editRoutePoints = (record: RouteRecord | null) => {
     if (!record || record.points.length < 2) return;
+    matchingToken.current += 1;
     const start = makePlannerPoint(
       record.points[0],
       "start",
@@ -1501,19 +1813,49 @@ export default function App() {
   };
   const detailReverse = () => {
     if (!detailRecord) return;
-    const reversed = [...detailRecord.points].reverse();
-    const start = makePlannerPoint(reversed[0], "start", reversed[0].name);
-    const destination = makePlannerPoint(
-      reversed[reversed.length - 1],
-      "destination",
-      reversed[reversed.length - 1].name,
+    const reversedResult = reverseRoute(detailRecord);
+    if (!reversedResult.ok) {
+      showAppAlert(t.reverse, t.routeMatchFailure, [
+        { text: t.done, style: "cancel" },
+      ]);
+      return;
+    }
+    const reversed = reversedResult.route;
+    updateWorkingRecord(reversed);
+    const start = makePlannerPoint(
+      reversed.points[0],
+      "start",
+      reversed.points[0].name,
     );
-    setBuilder({ status: "start-selected", start, destination, route: null });
+    const destination = makePlannerPoint(
+      reversed.points[reversed.points.length - 1],
+      "destination",
+      reversed.points[reversed.points.length - 1].name,
+    );
+    setBuilder({
+      status: "matching",
+      start,
+      destination,
+      route: viewForRecord(reversed, language),
+    });
     setStartText(start.name);
     setDestinationText(destination.name);
     setActiveField("destination");
     setDetailRouteId(null);
     setTab("plan");
+    void matchRecord(reversed).then((matched) => {
+      if (!matched) return;
+      setBuilder((current) => ({
+        ...current,
+        status: routeRecordHasAuthoritativeGeometry(matched)
+          ? "ready"
+          : "failed",
+        route: viewForRecord(matched, language),
+        error: routeRecordHasAuthoritativeGeometry(matched)
+          ? undefined
+          : t.routeMatchFailure,
+      }));
+    });
   };
   const saveDetail = () => {
     if (!detailRecord || !detailNameDraft.trim()) return;
@@ -1549,7 +1891,7 @@ export default function App() {
   const useDetailRoute = () => {
     if (
       !detailRecord ||
-      !routeIsNavigable(viewForRecord(detailRecord, language))
+      !routeRecordHasAuthoritativeGeometry(detailRecord)
     )
       return;
     setRideStartIntent(null);
@@ -1716,17 +2058,35 @@ export default function App() {
     rideRecordForHook?.id,
   ]);
   useEffect(() => {
+    const pending =
+      live.state === "requesting" ||
+      live.state === "loading" ||
+      live.state === "explanation" ||
+      live.state === "permission-explanation";
     setLocationPermission(
       live.permission === "granted"
         ? "granted"
         : live.permission === "denied"
           ? "denied"
-          : "undetermined",
+          : live.permission === "unavailable"
+            ? "unavailable"
+            : pending
+              ? "pending"
+              : "undetermined",
     );
-  }, [live.permission]);
+  }, [live.permission, live.state]);
   useEffect(() => {
     if (live.completionDraft) setCompletionDraftView(live.completionDraft);
   }, [live.completionDraft]);
+  useEffect(() => {
+    if (
+      pendingDraftHydrated &&
+      (completionDraftView?.completionState === "draft" ||
+        completionDraftView?.completionState === "save_failed") &&
+      tab === "home"
+    )
+      setTab("ride");
+  }, [completionDraftView?.completionState, pendingDraftHydrated, tab]);
 
   const writeActivity = async (activity: ActivityDraft) => {
     if (activityWriteInFlight.current) return false;
@@ -1767,6 +2127,26 @@ export default function App() {
     if (!completionDraftView) return;
     const payload = JSON.stringify(completionDraftView, null, 2);
     try {
+      if (Platform.OS === "web") {
+        const downloaded = downloadJsonInBrowser(
+          payload,
+          `${completionDraftView.id}.json`,
+        );
+        if (!downloaded) {
+          showAppAlert(
+            t.exportRide,
+            uiText(
+              "exportUnavailable",
+              "Export is not available on this device right now.",
+            ),
+          );
+          return;
+        }
+        const exported = markActivityExported(completionDraftView);
+        setCompletionDraftView(exported);
+        if (exported.completionState === "saved") await writeActivity(exported);
+        return;
+      }
       if (!FileSystem.cacheDirectory || !(await Sharing.isAvailableAsync())) {
         showAppAlert(
           t.exportRide,
@@ -1848,12 +2228,15 @@ export default function App() {
         distanceDisplays: routeLayerDistanceDisplays,
       })
     : [];
-  const homeRecommendationReason = homeAnalysisResult
+  const weatherUpdatedLabel = weatherRefresh.updatedAt
+    ? `${t.updated} ${formatAppTime(weatherRefresh.updatedAt)}`
+    : undefined;
+  const homeRecommendationReason = `${homeAnalysisResult
     ? explainSurfaceRun(homeAnalysisResult.run, t, language, distanceDisplay)
     : uiText(
         "goodWindowCopy",
         "Forecast is shown by named route segment. Comparison is paused while route/access evidence is being reviewed. This is not a safety claim.",
-      );
+      )}${weatherUpdatedLabel ? ` · ${weatherUpdatedLabel}` : ""}`;
   const detailComparisonReason = detailAnalysisResult
     ? explainSurfaceRun(detailAnalysisResult.run, t, language, distanceDisplay)
     : undefined;
@@ -1916,9 +2299,7 @@ export default function App() {
     ? localizeName(detailVariant.label, detailVariant.labelAr, language)
     : undefined;
   const detailEntryActionsEnabled = Boolean(
-    detailRecord &&
-    detailRecord.geometry.kind === "road_matched" &&
-    detailRecord.geometry.status === "ready",
+    detailRecord && routeRecordHasAuthoritativeGeometry(detailRecord),
   );
   const nbhEntryDistanceLabel =
     nbhEntryDistanceKm === null
@@ -2014,11 +2395,34 @@ export default function App() {
       emptyLabel: uiText("youNoImports", "No imported tracks yet."),
     },
   ];
+  const activeRideRecord =
+    live.activeSnapshot && "route" in live.activeSnapshot
+      ? live.activeSnapshot.route
+      : live.endedSnapshot && "route" in live.endedSnapshot
+        ? live.endedSnapshot.route
+        : rideRecordForHook;
+  const activeRidePlan =
+    live.position.activeRoute ??
+    (activeRideRecord
+      ? displayPlanForRecord(
+          activeRideRecord,
+          language,
+          departureAt,
+          departureWind,
+          conditions?.hourly,
+          conditions?.fetchedAt,
+          conditions?.source,
+        )
+      : ridePlan);
   const position: LiveRidePosition | undefined = live.position;
-  const rideLayers = rideRecordForHook
+  const rideLayers = activeRideRecord
     ? buildRouteLayers({
-        route: rideRecordForHook,
-        analysis: rideAnalysisResult?.run,
+        route: activeRideRecord,
+        analysis:
+          rideAnalysisResult?.run.routeId === activeRideRecord.id &&
+          rideAnalysisResult.run.routeRevision === activeRideRecord.revision
+            ? rideAnalysisResult.run
+            : undefined,
         selected: true,
         match: live.position.match,
         distanceDisplays: routeLayerDistanceDisplays,
@@ -2048,8 +2452,8 @@ export default function App() {
             startedLabel: formatAppTime(live.endedSnapshot.startedAt),
           }
         : null;
-  const rideStatus = rideRecordForHook
-    ? routeStatusForRecord(rideRecordForHook)
+  const rideStatus = activeRideRecord
+    ? routeStatusForRecord(activeRideRecord)
     : "draft";
   const permissionMessage =
     live.state === "permission-explanation"
@@ -2066,8 +2470,8 @@ export default function App() {
         : t.endRideConfirmCopy
       : live.endConfirmationMessage;
   const nextSegment =
-    ridePlan && live.segmentIndex >= 0
-      ? ridePlan.segments[live.segmentIndex]
+    activeRidePlan && live.segmentIndex >= 0
+      ? activeRidePlan.segments[live.segmentIndex]
       : undefined;
   const matchedRouteDistance =
     live.position.match?.state === "matched"
@@ -2078,13 +2482,13 @@ export default function App() {
       ? aheadWindow(rideAnalysisResult.run, matchedRouteDistance, 3)
       : [];
   const aheadLabel =
-    aheadSegments.length && ridePlan && matchedRouteDistance !== undefined
+    aheadSegments.length && activeRidePlan && matchedRouteDistance !== undefined
       ? `${t.aheadHorizon.replace(
           "{distance}",
           formatNumber(
             Math.min(
               3,
-              Math.max(0, ridePlan.distanceKm - matchedRouteDistance),
+              Math.max(0, activeRidePlan.distanceKm - matchedRouteDistance),
             ),
             locale,
             { minimumFractionDigits: 1, maximumFractionDigits: 1 },
@@ -2095,6 +2499,55 @@ export default function App() {
           )
           .join(" · ")}`
       : undefined;
+
+  const openPlanner = () => {
+    setSettingsOpen(false);
+    setDetailRouteId(null);
+    setTab("plan");
+  };
+  const openSavedRide = (activity: ActivityDraft) => {
+    setRideStartIntent(null);
+    setDetailRouteId(null);
+    setCompletionDraftView(activity);
+    setRecordingOnlyRide(!activity.routeSnapshot);
+    if (activity.routeSnapshot) {
+      const snapshotRecord = recordForPlan(
+        routePlanFromRecord(activity.routeSnapshot),
+      );
+      setSelectedRouteId(snapshotRecord?.id ?? null);
+      setConfirmedRouteId(snapshotRecord?.id ?? null);
+    } else {
+      setSelectedRouteId(null);
+      setConfirmedRouteId(null);
+    }
+    setTab("ride");
+  };
+  const stravaDisclosure = getStravaDisclosure(
+    language,
+    STRAVA_CONNECTION_STATE,
+  );
+  const useMatchedRoute = () => {
+    if (!builder.route || builder.status !== "ready") return;
+    const record =
+      recordForPlan(builder.route) ??
+      recordFromView(
+        builder.route,
+        "drawn",
+        "personal",
+        "road_matched",
+        "ready",
+      );
+    if (!routeRecordHasAuthoritativeGeometry(record)) {
+      setRouteMessage(t.routeMatchFailure);
+      return;
+    }
+    updateWorkingRecord(record);
+    setRideStartIntent(null);
+    setSelectedRouteId(record.id);
+    setConfirmedRouteId(null);
+    setDetailRouteId(record.id);
+    setTab("plan");
+  };
 
   if (catalogMode) return <ComponentCatalog />;
   if (fontMode) return <FontCatalog />;
@@ -2141,6 +2594,7 @@ export default function App() {
         statusLabel: uiText("youProfileStatus", "Local profile"),
       }}
       locationPermission={locationPermission}
+      stravaStatus={STRAVA_CONNECTION_STATE}
       distanceUnit={preferences.distanceUnit}
       notificationsEnabled={preferences.notificationsEnabled}
       backgroundRefreshEnabled={preferences.backgroundRefreshEnabled}
@@ -2158,7 +2612,7 @@ export default function App() {
       onBackgroundRefreshChange={(enabled) =>
         commitPreferences({ backgroundRefreshEnabled: enabled })
       }
-      onRequestLocationPermission={() => void requestLocationPermission()}
+      onRequestLocationPermission={requestLocationPermission}
       onOpenPrivacy={openPrivacy}
       onExportData={() => void exportData()}
       onDeleteData={deleteSavedRoutes}
@@ -2176,8 +2630,8 @@ export default function App() {
       routeStatus={detailRecord ? routeStatusForRecord(detailRecord) : "draft"}
       departureLabel={departureLabel}
       arrivalLabel={
-        detailRecord?.geometry.kind === "road_matched" &&
-        detailRecord.geometry.status === "ready" &&
+        detailRecord &&
+        routeRecordHasAuthoritativeGeometry(detailRecord) &&
         detailPlan?.arrivalAt
           ? formatBahrainTime(detailPlan.arrivalAt, locale, { hour12 })
           : "—"
@@ -2243,9 +2697,9 @@ export default function App() {
         homeRecord &&
         openRouteDetail(homePlan ?? routePlanFromRecord(homeRecord))
       }
-      onPlanRoute={() => setTab("plan")}
-      onChooseRoute={() => setTab("plan")}
-      onRefresh={() => void refresh()}
+      onPlanRoute={openPlanner}
+      onChooseRoute={openPlanner}
+      onRefresh={() => void refresh(true, true)}
     />
   ) : tab === "plan" ? (
     <RoutesScreen
@@ -2272,7 +2726,9 @@ export default function App() {
               : "draft",
       )}
       roadLabels={roadLabels}
-      samples={ROUTE_ALTERNATIVES}
+      samples={catalogRecords.map((record) =>
+        viewForRecord(record, language),
+      )}
       myRoutes={storedRouteRecords
         .filter(
           (record) =>
@@ -2309,6 +2765,7 @@ export default function App() {
       importReview={importReview}
       importReviewFileName={importReviewFileName}
       generatedReview={generatedReview}
+      loopGenerationFailed={loopGenerationFailed}
       routeMessage={routeMessage}
       knownRouteFamily={{
         family: NBH_FAMILY,
@@ -2337,26 +2794,7 @@ export default function App() {
       onMapPress={mapPlannerPress}
       onRetryMatch={retryPlannerMatch}
       onEditPoints={editPlannerPoints}
-      onUseMatchedRoute={() => {
-        if (builder.route && builder.status === "ready") {
-          setRideStartIntent(null);
-          setWorkingRecords((current) => ({
-            ...current,
-            [builder.route!.id]:
-              recordById(builder.route!.id) ??
-              recordFromView(
-                builder.route!,
-                "drawn",
-                "personal",
-                "road_matched",
-                "ready",
-              ),
-          }));
-          setSelectedRouteId(builder.route.id);
-          setConfirmedRouteId(builder.route.id);
-          setTab("ride");
-        }
-      }}
+      onUseMatchedRoute={useMatchedRoute}
       onAddStop={() => setActiveField("destination")}
       onReverse={reversePlanner}
       onImport={() => void importGpx()}
@@ -2367,6 +2805,10 @@ export default function App() {
       onRedoManual={redoManual}
       onClearManual={clearManual}
       onDoneManual={doneManual}
+      onUseManual={useManualRoute}
+      onSaveManual={saveManualRoute}
+      onEditManual={editManualRoute}
+      onDiscardManual={discardManualRoute}
       onRemoveManualPoint={removeManualPoint}
       onMoveManualPoint={moveManualPoint}
       onUseImport={useImport}
@@ -2376,6 +2818,7 @@ export default function App() {
       }}
       onUseGenerated={useGenerated}
       onCancelGenerated={() => setGeneratedReview(null)}
+      onRetryLoop={retryLoopGeneration}
       onSelect={selectRoute}
     />
   ) : tab === "ride" ? (
@@ -2386,7 +2829,7 @@ export default function App() {
       palette={palette}
       formatNumber={(value, options) => formatNumber(value, locale, options)}
       distanceDisplay={distanceDisplay}
-      route={ridePlan}
+      route={activeRidePlan}
       recordingOnly={recordingOnlyRide}
       state={live.state}
       position={position}
@@ -2406,11 +2849,11 @@ export default function App() {
           ? `${formatNumber(nextSegment.wind.magnitudeKph, locale)} ${t.speedUnit} · ${nextSegment.wind.kind === "headwind" ? t.headwind : nextSegment.wind.kind === "tailwind" ? t.tailwind : t.crosswind}`
           : undefined
       }
-      mapText={commonMapText(ridePlan, rideStatus)}
+      mapText={commonMapText(activeRidePlan, rideStatus)}
       roadLabels={roadLabels}
       layers={rideLayers}
       privacyMessage={t.foregroundOnly}
-      entryLabel={ridePlan?.points[0]?.name}
+      entryLabel={activeRidePlan?.points[0]?.name}
       onChooseRoute={() => {
         setRideStartIntent(null);
         setRecordingOnlyRide(false);
@@ -2468,16 +2911,16 @@ export default function App() {
       collections={profileCollections}
       activities={storedActivities}
       connection={{
-        providerLabel: "Strava",
-        statusLabel: uiText("notConnected", "Not connected"),
-        detail: stravaMessage || t.stravaNotConfigured,
-        actionLabel: t.connectReadOnly,
+        providerLabel: stravaDisclosure.title,
+        statusLabel: stravaDisclosure.statusLabel,
+        detail: stravaMessage || stravaDisclosure.body,
+        actionLabel: stravaDisclosure.actionLabel,
       }}
       privacy={{
         id: "privacy",
         icon: "map",
         title: t.privacySources,
-        description: t.privacyCopy,
+        description: getPrivacyCenterCopy(language).intro,
       }}
       settings={{
         id: "settings",
@@ -2490,13 +2933,17 @@ export default function App() {
       }}
       onOpenCollection={(kind) => {
         setTab("plan");
-        if (kind === "imports")
+        setDetailRouteId(null);
+        if (kind === "imports") {
           setSelectedRouteId(
             storedRouteRecords.find((record) => record.origin === "gpx")?.id ??
               null,
           );
+          setConfirmedRouteId(null);
+        }
       }}
       onOpenRoute={(item) => openRouteDetail(item.route)}
+      onOpenActivity={openSavedRide}
       onConnectionAction={() => {
         setStravaMessage(t.stravaNotConfigured);
         showAppAlert(t.connectStrava, t.stravaNotConfigured);
@@ -2506,58 +2953,79 @@ export default function App() {
     />
   );
   const ownsMapViewport = Boolean(
-    detailRouteId || manualMode || live.state === "active",
+    settingsOpen || detailRouteId || manualMode || live.state === "active",
   );
 
   return (
     <SafeAreaView style={shellStyles.safe}>
       <StatusBar style={theme === "light" ? "dark" : "light"} />
       <View style={shellStyles.appShell}>
-        <View style={[shellStyles.topbar, rtl && shellStyles.rtl]}>
-          <View style={shellStyles.brandBlock}>
-            <Text style={shellStyles.brand}>{t.brandName}</Text>
-            <Text style={shellStyles.location}>
-              {detailRouteId
-                ? uiText("routeDetail", "Route detail")
-                : settingsOpen
-                  ? t.settings
-                  : t[tab]}
-            </Text>
+        <SkipToContent
+          label={uiText("skipToContent", "Skip to content")}
+          targetId="main-content"
+          onSkip={() =>
+            scrollRef.current?.scrollTo({ y: 0, animated: false })
+          }
+        />
+        <AccessibleLandmark
+          role="banner"
+          label={t.brandName}
+          style={shellStyles.banner}
+        >
+          <View style={[shellStyles.topbar, rtl && shellStyles.rtl]}>
+            <View style={shellStyles.brandBlock}>
+              <AccessibleHeading level={1} style={shellStyles.brand}>
+                {t.brandName}
+              </AccessibleHeading>
+              <Text style={shellStyles.location}>
+                {detailRouteId
+                  ? uiText("routeDetail", "Route detail")
+                  : settingsOpen
+                    ? t.settings
+                    : t[tab]}
+              </Text>
+            </View>
           </View>
-        </View>
-        {ownsMapViewport ? (
-          <View style={shellStyles.surface}>{content}</View>
-        ) : (
-          <ScrollView
-            ref={scrollRef}
-            style={shellStyles.scroll}
-            contentContainerStyle={shellStyles.content}
-            showsVerticalScrollIndicator={false}
+        </AccessibleLandmark>
+        <AccessibleLandmark
+          role="main"
+          label={t.brandName}
+          style={shellStyles.mainLandmark}
+        >
+          <View
+            nativeID="main-content"
+            style={shellStyles.mainContent}
+            {...({ tabIndex: -1 } as any)}
           >
-            {content}
-          </ScrollView>
-        )}
+            {ownsMapViewport ? (
+              <View style={shellStyles.surface}>{content}</View>
+            ) : (
+              <ScrollView
+                ref={scrollRef}
+                style={shellStyles.scroll}
+                contentContainerStyle={shellStyles.content}
+                showsVerticalScrollIndicator={false}
+              >
+                {content}
+              </ScrollView>
+            )}
+          </View>
+        </AccessibleLandmark>
         {!settingsOpen && !detailRouteId && !manualMode && live.state !== "active" && (
-          <View style={[shellStyles.tabbar, rtl && shellStyles.rtl]}>
-            {(["home", "plan", "ride", "you"] as Tab[]).map((item) => (
-              <TabButton
-                key={item}
-                active={tab === item}
-                icon={
-                  item === "home"
-                    ? "home"
-                    : item === "plan"
-                      ? "map"
-                      : item === "ride"
-                        ? "pulse"
-                        : "person"
-                }
-                label={t[item]}
-                styles={shellStyles}
-                palette={palette}
-                onPress={() => setTab(item)}
-              />
-            ))}
+          <View style={shellStyles.navSafeArea}>
+            <AccessibleNavigation
+              items={[
+                { id: "home", label: t.home, icon: "home" },
+                { id: "plan", label: t.plan, icon: "map" },
+                { id: "ride", label: t.ride, icon: "pulse" },
+                { id: "you", label: t.you, icon: "person" },
+              ]}
+              currentId={tab}
+              label={uiText("primaryNavigation", "Primary navigation")}
+              palette={palette}
+              rtl={rtl}
+              onChange={(next) => setTab(next as Tab)}
+            />
           </View>
         )}
       </View>
@@ -2738,21 +3206,99 @@ const webAlertStyles = StyleSheet.create({
   textRight: { textAlign: "right" },
 });
 
+function routeRecordIdentityKey(
+  record: Pick<
+    RouteRecord,
+    "id" | "origin" | "ownership" | "familyId" | "variantId" | "revisionId"
+  >,
+) {
+  return JSON.stringify([
+    record.id,
+    record.origin,
+    record.ownership,
+    record.familyId ?? null,
+    record.variantId ?? null,
+    record.revisionId ?? null,
+  ]);
+}
+
+function routeRecordMatchesPlanIdentity(record: RouteRecord, plan: RoutePlan) {
+  if (record.id !== plan.id) return false;
+  if (plan.origin !== undefined && record.origin !== plan.origin) return false;
+  if (plan.ownership !== undefined && record.ownership !== plan.ownership)
+    return false;
+  if (plan.familyId !== undefined && record.familyId !== plan.familyId)
+    return false;
+  if (plan.variantId !== undefined && record.variantId !== plan.variantId)
+    return false;
+  if (plan.revisionId !== undefined && record.revisionId !== plan.revisionId)
+    return false;
+  return true;
+}
+
+function hasExplicitPlanIdentity(plan: RoutePlan) {
+  return Boolean(
+    plan.origin !== undefined ||
+      plan.ownership !== undefined ||
+      plan.familyId !== undefined ||
+      plan.variantId !== undefined ||
+      plan.revisionId !== undefined,
+  );
+}
+
+function routeRecordMatchesPlanState(record: RouteRecord, plan: RoutePlan) {
+  return (
+    (plan.revision === undefined || record.revision === plan.revision) &&
+    (plan.geometryKind === undefined || record.geometry.kind === plan.geometryKind) &&
+    (plan.geometryStatus === undefined || record.geometry.status === plan.geometryStatus)
+  );
+}
+
+function privacyCenterMessage(
+  privacy: ReturnType<typeof getPrivacyCenterCopy>,
+) {
+  const externalFlow = (flow: ReturnType<typeof getPrivacyCenterCopy>["routeMatching"]) =>
+    `${flow.title}: ${flow.body} ${flow.providerName}. ${flow.retention}`;
+  return [
+    privacy.intro,
+    `${privacy.storedData.title}: ${privacy.storedData.body}`,
+    `${privacy.temporaryData.title}: ${privacy.temporaryData.body}`,
+    `${privacy.locationTiming.title}: ${privacy.locationTiming.body}`,
+    externalFlow(privacy.routeMatching),
+    externalFlow(privacy.weatherRefresh),
+    `${privacy.retention.title}: ${privacy.retention.body}`,
+    `${privacy.exportShare.title}: ${privacy.exportShare.body}`,
+    `${privacy.deletion.title}: ${privacy.deletion.body}`,
+    `${privacy.strava.title}: ${privacy.strava.body}`,
+  ].join("\n\n");
+}
+
+function reconciledGeometryForRecord(record: RouteRecord) {
+  if (
+    record.geometry.kind === "road_matched" &&
+    record.geometry.status === "ready" &&
+    !routeRecordHasAuthoritativeGeometry(record)
+  )
+    return { kind: "waypoint_trace" as const, status: "unavailable" as const };
+  return {
+    kind: record.geometry.kind,
+    status: record.geometry.status,
+  };
+}
+
 function viewForRecord(
   record: RouteRecord,
   language: Language,
 ): CanonicalRouteView {
-  // A ready road match must always expose current analysis to review surfaces.
-  // This also repairs records created during the v1/v2 transition that have
-  // geometry but no persisted analysis snapshot yet.
   const plan = displayPlanForRecord(record, language);
+  const geometry = reconciledGeometryForRecord(record);
   return {
     ...plan,
     revision: record.revision,
     origin: record.origin,
     ownership: record.ownership,
-    geometryKind: record.geometry.kind,
-    geometryStatus: record.geometry.status,
+    geometryKind: geometry.kind,
+    geometryStatus: geometry.status,
     roadEvidenceStatus: record.roadEvidenceStatus,
     departureAt: plan.departureAt,
     arrivalAt: plan.arrivalAt,
@@ -2771,12 +3317,7 @@ function analyseSurfaceRecord(
   forecastRunAt?: string,
   forecastSource?: string,
 ) {
-  if (
-    !record ||
-    record.geometry.status !== "ready" ||
-    record.geometry.kind === "waypoint_trace"
-  )
-    return null;
+  if (!record || !routeRecordHasAuthoritativeGeometry(record)) return null;
   try {
     return analyseRouteRevision({
       route: record,
@@ -2887,10 +3428,7 @@ function displayPlanForRecord(
   forecastSource?: string,
 ): CanonicalRouteView {
   const raw = routePlanFromRecord(record);
-  if (
-    record.geometry.status === "ready" &&
-    record.geometry.kind !== "waypoint_trace"
-  ) {
+  if (routeRecordHasAuthoritativeGeometry(record)) {
     try {
       return localizePlanForRecord(
         record,
@@ -2915,12 +3453,13 @@ function localizePlanForRecord(
   plan: RoutePlan,
   language: Language,
 ): CanonicalRouteView {
+  const geometry = reconciledGeometryForRecord(record);
   return {
     ...localizePlan(plan, language),
     origin: record.origin,
     ownership: record.ownership,
-    geometryKind: record.geometry.kind,
-    geometryStatus: record.geometry.status,
+    geometryKind: geometry.kind,
+    geometryStatus: geometry.status,
     roadEvidenceStatus: record.roadEvidenceStatus,
     revision: record.revision,
     routeStatus: routeStatusForRecord(record),
@@ -2951,27 +3490,23 @@ function routeStatusForRecord(
   record: RouteRecord,
 ): Exclude<RouteStatus, "failed"> {
   if (record.geometry.status === "matching") return "matching";
-  if (
-    record.geometry.kind === "road_matched" &&
-    record.geometry.status === "ready"
-  )
-    return "ready";
-  if (
-    record.geometry.kind === "recorded_trace" &&
-    record.geometry.status === "ready"
-  )
+  if (record.geometry.status === "ready") {
+    if (routeRecordHasAuthoritativeGeometry(record)) return "ready";
+    if (record.geometry.kind === "road_matched") return "unavailable";
     return "trace_ready";
+  }
   if (record.geometry.status === "unavailable") return "unavailable";
   return "draft";
 }
 function uniqueRecords(records: RouteRecord[]) {
-  const byId = new Map<string, RouteRecord>();
+  const byIdentity = new Map<string, RouteRecord>();
   records.forEach((record) => {
-    const existing = byId.get(record.id);
+    const key = routeRecordIdentityKey(record);
+    const existing = byIdentity.get(key);
     if (!existing || record.revision >= existing.revision)
-      byId.set(record.id, record);
+      byIdentity.set(key, record);
   });
-  return [...byId.values()];
+  return [...byIdentity.values()];
 }
 function uniqueActivities(activities: ActivityDraft[]) {
   const byId = new Map<string, ActivityDraft>();
@@ -3004,8 +3539,9 @@ function isValidRouteStoragePayload(raw: string) {
   }
 }
 function upsertRecords(records: RouteRecord[], record: RouteRecord) {
+  const key = routeRecordIdentityKey(record);
   return uniqueRecords([
-    ...records.filter((candidate) => candidate.id !== record.id),
+    ...records.filter((candidate) => routeRecordIdentityKey(candidate) !== key),
     record,
   ]);
 }
@@ -3016,6 +3552,7 @@ function surfaceItem(
   distanceDisplay: ReturnType<typeof createDistanceDisplay>,
 ): RouteSurfaceItem {
   const plan = displayPlanForRecord(record, language);
+  const geometry = reconciledGeometryForRecord(record);
   const sourceLabel =
     record.ownership === "catalog"
       ? t.previewRoute
@@ -3031,8 +3568,8 @@ function surfaceItem(
     meta: {
       ownership: record.ownership,
       origin: record.origin,
-      geometryKind: record.geometry.kind,
-      geometryStatus: record.geometry.status,
+      geometryKind: geometry.kind,
+      geometryStatus: geometry.status,
       roadEvidenceStatus: record.roadEvidenceStatus,
       revision: record.revision,
       ownershipLabel: record.ownership === "personal" ? t.yours : t.sample,
@@ -3109,46 +3646,8 @@ function BootScreen({ palette, rtl }: { palette: Palette; rtl: boolean }) {
     </SafeAreaView>
   );
 }
-function TabButton({
-  active,
-  icon,
-  label,
-  styles,
-  palette,
-  onPress,
-}: {
-  active: boolean;
-  icon: IconName;
-  label: string;
-  styles: ReturnType<typeof createShellStyles>;
-  palette: Palette;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="tab"
-      accessibilityState={{ selected: active }}
-      onPress={onPress}
-      style={styles.tabButton}
-    >
-      <View style={[styles.tabIcon, active && styles.tabIconActive]}>
-        <Icon
-          name={icon}
-          color={active ? palette.accent : palette.muted}
-          size={18}
-        />
-      </View>
-      <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
 function createShellStyles(palette: Palette, rtl: boolean) {
   const regular = rtl ? FONT_ARABIC_REGULAR : FONT_REGULAR;
-  const medium = rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM;
-  const semibold = rtl ? FONT_ARABIC_SEMIBOLD : FONT_SEMIBOLD;
-  const bold = rtl ? FONT_ARABIC_BOLD : FONT_BOLD;
   const extraBold = rtl ? FONT_ARABIC_BOLD : FONT_EXTRABOLD;
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: palette.bg },
@@ -3161,6 +3660,9 @@ function createShellStyles(palette: Palette, rtl: boolean) {
     },
     scroll: { flex: 1 },
     surface: { flex: 1, minHeight: 0, width: "100%" },
+    banner: { width: "100%" },
+    mainLandmark: { flex: 1, minHeight: 0, width: "100%" },
+    mainContent: { flex: 1, minHeight: 0, width: "100%" },
     content: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 128 },
     topbar: {
       minHeight: 67,
@@ -3190,67 +3692,11 @@ function createShellStyles(palette: Palette, rtl: boolean) {
       fontSize: 12,
       lineHeight: 18,
     },
-    topActions: { flexDirection: "row", gap: 8 },
-    topAction: {
-      minHeight: 42,
-      paddingHorizontal: 11,
-      justifyContent: "center",
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: palette.line,
-      backgroundColor: palette.panel,
-    },
-    topActionText: {
-      color: palette.ink,
-      fontFamily: semibold,
-      fontSize: 12,
-      lineHeight: 18,
-      fontWeight: "600",
-    },
-    tabbar: {
-      minHeight: 78,
-      marginHorizontal: 12,
-      marginBottom: 10,
-      paddingHorizontal: 6,
-      paddingTop: 8,
-      paddingBottom: 8,
-      backgroundColor: palette.nav,
-      borderWidth: 1,
-      borderColor: palette.line,
-      borderRadius: 21,
-      flexDirection: "row",
-      justifyContent: "space-around",
-    },
-    tabButton: {
-      flex: 1,
-      minWidth: 0,
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 5,
-    },
-    tabIcon: {
-      width: 42,
-      height: 31,
-      borderRadius: 11,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    tabIconActive: {
-      backgroundColor: palette.accentSoft,
-      borderWidth: 1,
-      borderColor: palette.accent,
-    },
-    tabLabel: {
-      color: palette.muted,
-      fontFamily: medium,
-      fontSize: rtl ? 12 : 11,
-      lineHeight: 18,
-      fontWeight: "500",
-    },
-    tabLabelActive: {
-      color: palette.accent,
-      fontFamily: bold,
-      fontWeight: "700",
+    navSafeArea: {
+      minHeight: 100,
+      paddingHorizontal: 12,
+      paddingBottom: 10,
+      backgroundColor: palette.bg,
     },
   });
 }

@@ -28,9 +28,11 @@ test('web alert fallback exposes an accessible action surface', () => {
 });
 
 test('privacy, export, discard, and connection feedback use the presenter', () => {
-  assert.match(appSource, /const openPrivacy = \(\) => showAppAlert/);
+  assert.match(appSource, /const openPrivacy = \(\) =>\s+showAppAlert/);
+  assert.match(appSource, /getPrivacyCenterCopy/);
   assert.match(appSource, /const discardCompletion = \(\) => \{/);
   assert.match(appSource, /showAppAlert\(t\.discardRide, t\.discardRideConfirm/);
   assert.match(appSource, /showAppAlert\(t\.exportRide/);
   assert.match(appSource, /showAppAlert\(t\.connectStrava, t\.stravaNotConfigured\)/);
+  assert.match(appSource, /setLocationPermission\("unavailable"\)/);
 });
