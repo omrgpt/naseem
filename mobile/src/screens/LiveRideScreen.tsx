@@ -8,7 +8,9 @@ import type { ActivityDraft, PositionMatchState } from "../domain";
 import { localizedConfidenceLabel, localizedVariantLabel } from "../i18n";
 import {
   completionStateForDraft,
-  downloadActivityDraft,
+  exportActivityDraft,
+  locationUnavailableCopy,
+  locationUnavailableTitle,
   recordingControlLabels,
   recordingOnlyLabels,
 } from "../rideRecording";
@@ -83,11 +85,17 @@ export function LiveRideScreen({
   onDiscardCompletion,
   onExportCompletion,
 }: Task4LiveRideScreenProps) {
-  const [browserExported, setBrowserExported] = useState(false);
+  const [browserExportedDraft, setBrowserExportedDraft] =
+    useState<ActivityDraft | null>(null);
   useEffect(() => {
-    setBrowserExported(false);
-  }, [completionDraft?.id, completionDraft?.exportState]);
-  const displayRoute = state === "active" ? position?.activeRoute ?? route : route;
+    setBrowserExportedDraft(null);
+  }, [
+    completionDraft?.id,
+    completionDraft?.exportState,
+    completionDraft?.completionState,
+  ]);
+  const viewCompletionDraft = browserExportedDraft ?? completionDraft;
+  const displayRoute = position?.activeRoute ?? route;
   const canonical = asCanonicalRoute(displayRoute);
   const navigable = Boolean(
     canonical && routeIsNavigable(canonical) && routeStatus === "ready",
@@ -95,13 +103,15 @@ export function LiveRideScreen({
   const numberText = (value: number, options?: Intl.NumberFormatOptions) =>
     formatNumber ? formatNumber(value, options) : String(value);
   const matchState = position?.match?.state;
+  const needsLocationRecovery =
+    matchState === "stale" || matchState === "off-corridor";
   const recordingLabels = recordingOnlyLabels(rtl);
   const controlLabels = recordingControlLabels(rtl);
-  const completionState = completionDraft
-    ? completionStateForDraft(completionDraft)
+  const completionState = viewCompletionDraft
+    ? completionStateForDraft(viewCompletionDraft)
     : null;
   const showCompletion = Boolean(
-    completionDraft &&
+    viewCompletionDraft &&
       state !== "active" &&
       state !== "ending" &&
       state !== "denied" &&
@@ -110,18 +120,17 @@ export function LiveRideScreen({
   );
   const visualState = showCompletion ? completionState! : state;
   const handleExport = () => {
-    if (
-      Platform.OS === "web" &&
-      completionDraft &&
-      downloadActivityDraft(completionDraft)
-    ) {
-      setBrowserExported(true);
-      return;
+    if (Platform.OS === "web" && completionDraft) {
+      const exported = exportActivityDraft(completionDraft);
+      if (exported) {
+        setBrowserExportedDraft(exported);
+        return;
+      }
     }
     onExportCompletion?.();
   };
 
-  if (showCompletion && completionDraft)
+  if (showCompletion && viewCompletionDraft)
     return (
       <ScreenFrame
         t={t}
@@ -140,7 +149,7 @@ export function LiveRideScreen({
         }
       >
         <CompletionPanel
-          draft={completionDraft}
+          draft={viewCompletionDraft}
           t={t}
           rtl={rtl}
           styles={styles}
@@ -151,7 +160,6 @@ export function LiveRideScreen({
           onRetrySave={onRetrySaveCompletion}
           onDiscard={onDiscardCompletion}
           onExport={handleExport}
-          exportedLocally={browserExported}
         />
       </ScreenFrame>
     );
@@ -307,9 +315,7 @@ export function LiveRideScreen({
         styles={styles}
         title={
           state === "unavailable"
-            ? rtl
-              ? "الموقع غير متاح في هذا المتصفح"
-              : "Location unavailable in this browser"
+            ? locationUnavailableTitle(Platform.OS, rtl)
             : rtl
               ? "الموقع غير مسموح"
               : "Location not allowed"
@@ -327,9 +333,7 @@ export function LiveRideScreen({
                 ? "locationUnavailableTitle"
                 : "locationNotAllowedTitle",
               state === "unavailable"
-                ? rtl
-                  ? "الموقع غير متاح الآن. يمكنك المحاولة مرة أخرى أو المتابعة بدون موقع."
-                  : "Location is unavailable right now. Try again or continue without location."
+                ? locationUnavailableCopy(Platform.OS, rtl)
                 : rtl
                   ? "لم يُسمح بالوصول إلى الموقع. يمكنك المحاولة مرة أخرى أو المتابعة بدون موقع."
                   : "Location is not allowed. Try again or continue without location.",
@@ -425,9 +429,9 @@ export function LiveRideScreen({
         styles={styles}
         title={screenText(t, "liveStateEnded", "Live ride ended")}
       >
-        {completionDraft ? (
+        {viewCompletionDraft ? (
           <CompletionPanel
-            draft={completionDraft}
+            draft={viewCompletionDraft}
             t={t}
             rtl={rtl}
             styles={styles}
@@ -438,7 +442,6 @@ export function LiveRideScreen({
             onRetrySave={onRetrySaveCompletion}
             onDiscard={onDiscardCompletion}
             onExport={handleExport}
-            exportedLocally={browserExported}
           />
         ) : (
           <View style={styles.panel} accessibilityLiveRegion="polite">
@@ -774,7 +777,7 @@ export function LiveRideScreen({
                 {screenText(
                   t,
                   "liveRecoveryCopy",
-                  "Check the map and surroundings. Progress stays paused until the next confident fix.",
+                  "Check the map and surroundings. Progress stays paused until the next confident fix. You can retry, pause, continue, or end and keep this recording.",
                 )}
               </Text>
               <Text style={[styles.fieldHint, rtl && styles.textRight]}>
@@ -863,7 +866,15 @@ export function LiveRideScreen({
               style={[styles.primary, styles.danger]}
             >
               <Text style={styles.dangerText}>
-                {screenText(t, "endRide", "End live ride")}
+                {screenText(
+                  t,
+                  needsLocationRecovery
+                    ? "endRideKeepRecording"
+                    : "endRide",
+                  needsLocationRecovery
+                    ? "End ride and keep this recording"
+                    : "End live ride",
+                )}
               </Text>
             </Pressable>
           </View>
@@ -1090,7 +1101,6 @@ function CompletionPanel({
   onRetrySave,
   onDiscard,
   onExport,
-  exportedLocally,
 }: {
   draft: ActivityDraft;
   t: LiveRideScreenProps["t"];
@@ -1103,7 +1113,6 @@ function CompletionPanel({
   onRetrySave?: () => void;
   onDiscard?: () => void;
   onExport?: () => void;
-  exportedLocally?: boolean;
 }) {
   const [saving, setSaving] = useState(false);
   const numberText = (value: number, options?: Intl.NumberFormatOptions) =>
@@ -1130,13 +1139,11 @@ function CompletionPanel({
     draft.routeSnapshot?.variantId,
     [NBH_PREVIEW_VARIANT],
   );
-  const exported = exportedLocally || draft.exportState === "exported";
   const saved = draft.completionState === "saved";
   const failed = draft.completionState === "save_failed";
   const discarded = draft.completionState === "discarded";
-  const displayState = exported
-    ? "exported"
-    : completionStateForDraft(draft);
+  const exported = !failed && draft.exportState === "exported";
+  const displayState = completionStateForDraft(draft);
   return (
     <View style={styles.panel} accessibilityLiveRegion="polite">
       <StatusBadge

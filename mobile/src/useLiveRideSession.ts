@@ -29,14 +29,23 @@ import {
   classifyLocationFailure,
   completionStateForDraft,
   isBrowserLocationAvailable,
+  locationUnavailableCopy,
+  locationWatchdogState,
+  permissionStateFromResult,
   transitionLiveRideState,
+  LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS,
   type LiveRideCompletionState,
+  type LiveRidePermissionState,
   type LiveRideStateName,
+  type RidePauseInterval,
 } from "./rideRecording";
 
 export {
   classifyLocationFailure,
   isBrowserLocationAvailable,
+  locationUnavailableCopy,
+  locationWatchdogState,
+  permissionStateFromResult,
   transitionLiveRideState,
 } from "./rideRecording";
 
@@ -48,11 +57,7 @@ export type LiveRideSessionState =
   | "permission-explanation"
   | "permission-denied"
   | "ended";
-export type LiveRidePermission =
-  | "granted"
-  | "denied"
-  | "unavailable"
-  | "undetermined";
+export type LiveRidePermission = LiveRidePermissionState;
 
 export type LiveRideSessionOptions = {
   route: RoutePlan | null;
@@ -202,7 +207,7 @@ export function useLiveRideSession({
     "Location not allowed. Try again, open settings, or continue without location.";
   const locationUnavailableMessage =
     messages?.locationUnavailable ??
-    "Location unavailable in this browser. Try again, open settings where supported, or continue without location.";
+    locationUnavailableCopy(Platform.OS);
   const recordingPausedMessage =
     messages?.recordingPaused ??
     "Recording paused. Your samples remain on this device until you continue or end the ride.";
@@ -249,9 +254,22 @@ export function useLiveRideSession({
   >([]);
   const matchHistoryRef = useRef<PositionMatch[]>([]);
   const pausedRef = useRef(false);
+  const pauseIntervalsRef = useRef<Array<{ startedAt: string; endedAt?: string }>>([]);
+  const openPauseRef = useRef<{ startedAt: string; endedAt?: string } | null>(null);
+  const lastFixReceivedAtRef = useRef<number | null>(null);
   const [watchAttempt, setWatchAttempt] = useState(0);
   const routeStateKey = `${route?.id ?? "none"}:${routeRecord?.revision ?? 0}:${recordingOnly ? "recording-only" : "route"}`;
   const lastRouteStateKey = useRef(routeStateKey);
+  const finalizePauseIntervals = (endedAt: string): RidePauseInterval[] => {
+    if (openPauseRef.current && !openPauseRef.current.endedAt)
+      openPauseRef.current.endedAt = endedAt;
+    const intervals = pauseIntervalsRef.current.map((interval) => ({
+      startedAt: interval.startedAt,
+      endedAt: interval.endedAt ?? endedAt,
+    }));
+    openPauseRef.current = null;
+    return intervals;
+  };
 
   useEffect(() => {
     if (activeSnapshot) return;
@@ -262,6 +280,9 @@ export function useLiveRideSession({
       setCompletionDraft(null);
       setState(route || recordingOnly ? "ready" : "no-route");
       pausedRef.current = false;
+      pauseIntervalsRef.current = [];
+      openPauseRef.current = null;
+      lastFixReceivedAtRef.current = null;
       setIsPaused(false);
       setPosition({ progress: 0, isPaused: false, canPause: false });
       setSegmentIndex(-1);
@@ -289,6 +310,9 @@ export function useLiveRideSession({
       return;
     setState(route || recordingOnly ? "ready" : "no-route");
     pausedRef.current = false;
+    pauseIntervalsRef.current = [];
+    openPauseRef.current = null;
+    lastFixReceivedAtRef.current = null;
     setIsPaused(false);
     setPosition({ progress: 0, isPaused: false, canPause: false });
     setSegmentIndex(-1);
@@ -312,14 +336,16 @@ export function useLiveRideSession({
       .then((result) => {
         if (cancelled) return;
         setPermission(
-          result.status === "granted"
-            ? "granted"
-            : result.status === "denied"
-              ? "denied"
-              : "undetermined",
+          permissionStateFromResult(
+            result,
+            Platform.OS,
+            Platform.OS !== "web" || isBrowserLocationAvailable(),
+          ),
         );
       })
-      .catch(() => undefined);
+      .catch((error) => {
+        if (!cancelled) setPermission(classifyLocationFailure(error, Platform.OS));
+      });
     return () => {
       cancelled = true;
     };
@@ -329,6 +355,7 @@ export function useLiveRideSession({
     if (state !== "active" || !activeSnapshot) return;
     let cancelled = false;
     let subscription: Location.LocationSubscription | undefined;
+    const watcherStartedAtMs = Date.now();
     const reportFailure = (error: unknown) => {
       if (cancelled) return;
       const failure = classifyLocationFailure(error, Platform.OS);
@@ -359,6 +386,55 @@ export function useLiveRideSession({
     matcherRef.current = activePlan
       ? createStatefulRouteMatcher(activePlan)
       : null;
+    const markWatchdogStale = () => {
+      if (
+        cancelled ||
+        locationWatchdogState({
+          nowMs: Date.now(),
+          startedAtMs: watcherStartedAtMs,
+          lastFixAtMs: lastFixReceivedAtRef.current ?? undefined,
+          paused: pausedRef.current,
+          timeoutMs: LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS,
+        }) !== "stale"
+      )
+        return;
+      setPosition((current) => {
+        if (
+          current.match?.state === "stale" ||
+          current.match?.state === "off-corridor"
+        )
+          return current;
+        const previousMatch = current.match;
+        const timestamp =
+          previousMatch?.timestamp ??
+          current.lastFixAt ??
+          new Date(watcherStartedAtMs).toISOString();
+        const progress = previousMatch?.progress ?? current.progress;
+        return {
+          ...current,
+          match: {
+            routeDistanceKm:
+              previousMatch?.routeDistanceKm ??
+              progress * (activePlan?.distanceKm ?? 0),
+            progress,
+            confidence: "low",
+            state: "stale",
+            ...(previousMatch?.accuracyMeters !== undefined
+              ? { accuracyMeters: previousMatch.accuracyMeters }
+              : {}),
+            candidateCount: previousMatch?.candidateCount ?? 0,
+            timestamp,
+            offCorridorKm: previousMatch?.offCorridorKm ?? 0,
+          },
+          offRouteLabel: undefined,
+        };
+      });
+      setStatusMessage(locationUpdatesStoppedMessage);
+    };
+    const watchdog = setInterval(
+      markWatchdogStale,
+      LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS / 6,
+    );
     void Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.Balanced,
@@ -367,6 +443,7 @@ export function useLiveRideSession({
       },
       (location) => {
         if (cancelled) return;
+        lastFixReceivedAtRef.current = Date.now();
         const coordinate = {
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
@@ -460,6 +537,7 @@ export function useLiveRideSession({
       .catch(reportFailure);
     return () => {
       cancelled = true;
+      clearInterval(watchdog);
       subscription?.remove();
     };
   }, [
@@ -539,10 +617,23 @@ export function useLiveRideSession({
         }
         const result = await Location.requestForegroundPermissionsAsync();
         if (requestId !== permissionRequestRef.current) return;
-        if (result.status !== "granted") {
-          setPermission("denied");
-          setState(transitionLiveRideState("requesting", "permission-denied"));
-          setPermissionMessage(locationDeniedMessage);
+        const nextPermission = permissionStateFromResult(
+          result,
+          Platform.OS,
+          Platform.OS !== "web" || isBrowserLocationAvailable(),
+        );
+        if (nextPermission !== "granted") {
+          const denied = nextPermission === "denied";
+          setPermission(nextPermission);
+          setState(
+            transitionLiveRideState(
+              "requesting",
+              denied ? "permission-denied" : "location-unavailable",
+            ),
+          );
+          setPermissionMessage(
+            denied ? locationDeniedMessage : locationUnavailableMessage,
+          );
           return;
         }
         setPermission("granted");
@@ -562,6 +653,9 @@ export function useLiveRideSession({
           matchHistoryRef.current = [];
           progressRef.current = 0;
           pausedRef.current = false;
+          pauseIntervalsRef.current = [];
+          openPauseRef.current = null;
+          lastFixReceivedAtRef.current = null;
           setIsPaused(false);
           setPosition({ progress: 0, isPaused: false, canPause: true });
           setState(transitionLiveRideState("requesting", "permission-granted"));
@@ -587,6 +681,9 @@ export function useLiveRideSession({
         setCompletionDraft(null);
         samplesRef.current = [];
         matchHistoryRef.current = [];
+        pauseIntervalsRef.current = [];
+        openPauseRef.current = null;
+        lastFixReceivedAtRef.current = null;
         matcherRef.current = createStatefulRouteMatcher(
           routePlanFromRecord(started.snapshot.route),
         );
@@ -626,6 +723,7 @@ export function useLiveRideSession({
   const retryPermission = () => {
     if (activeSnapshot) {
       const requestId = ++permissionRequestRef.current;
+      setState("requesting");
       void (async () => {
         try {
           if (Platform.OS === "web" && !isBrowserLocationAvailable()) {
@@ -634,12 +732,27 @@ export function useLiveRideSession({
             setPermissionMessage(locationUnavailableMessage);
             return;
           }
-          const result = await Location.getForegroundPermissionsAsync();
+          let nextPermission = permissionStateFromResult(
+            await Location.getForegroundPermissionsAsync(),
+            Platform.OS,
+            Platform.OS !== "web" || isBrowserLocationAvailable(),
+          );
           if (requestId !== permissionRequestRef.current) return;
-          if (result.status !== "granted") {
-            setPermission("denied");
-            setState("denied");
-            setPermissionMessage(locationDeniedMessage);
+          if (nextPermission !== "granted") {
+            nextPermission = permissionStateFromResult(
+              await Location.requestForegroundPermissionsAsync(),
+              Platform.OS,
+              Platform.OS !== "web" || isBrowserLocationAvailable(),
+            );
+            if (requestId !== permissionRequestRef.current) return;
+          }
+          if (nextPermission !== "granted") {
+            const denied = nextPermission === "denied";
+            setPermission(nextPermission);
+            setState(denied ? "denied" : "unavailable");
+            setPermissionMessage(
+              denied ? locationDeniedMessage : locationUnavailableMessage,
+            );
             return;
           }
           if (!(await locationServicesAvailable())) {
@@ -651,6 +764,7 @@ export function useLiveRideSession({
           }
           setPermission("granted");
           setState("active");
+          lastFixReceivedAtRef.current = null;
           setWatchAttempt((attempt) => attempt + 1);
           setStatusMessage(
             recordingOnly ? recordingActiveMessage : liveActiveMessage,
@@ -703,6 +817,7 @@ export function useLiveRideSession({
       return;
     }
     const endedAt = new Date().toISOString();
+    const pausedIntervals = finalizePauseIntervals(endedAt);
     const endedSnapshot =
       "route" in activeSnapshot
         ? endActiveRide(activeSnapshot, endedAt).snapshot
@@ -714,13 +829,15 @@ export function useLiveRideSession({
             samples: samplesRef.current,
             matchHistory: matchHistoryRef.current,
             analysisSnapshot: activeSnapshot.route.analysis,
-            gaps: countLocationGaps(samplesRef.current),
+            gaps: countLocationGaps(samplesRef.current, 45, pausedIntervals),
+            pausedIntervals,
           })
         : createRecordingOnlyCompletionDraft(activeSnapshot, {
             endedAt,
             samples: samplesRef.current,
             matchHistory: matchHistoryRef.current,
-            gaps: countLocationGaps(samplesRef.current),
+            gaps: countLocationGaps(samplesRef.current, 45, pausedIntervals),
+            pausedIntervals,
           });
     setEndedSnapshot(endedSnapshot);
     setCompletionDraft(draft);
@@ -731,6 +848,7 @@ export function useLiveRideSession({
       ...current,
       isPaused: false,
       canPause: false,
+      activeRoute: undefined,
       pause: undefined,
       resume: undefined,
     }));
@@ -741,24 +859,47 @@ export function useLiveRideSession({
     try {
       if (Platform.OS === "web" && !isBrowserLocationAvailable()) {
         setPermission("unavailable");
+        if (activeSnapshot) {
+          setState("unavailable");
+          setPermissionMessage(locationUnavailableMessage);
+        }
         return;
       }
-      const result = await Location.getForegroundPermissionsAsync();
-      setPermission(
-        result.status === "granted"
-          ? "granted"
-          : result.status === "denied"
-            ? "denied"
-            : "undetermined",
+      let nextPermission = permissionStateFromResult(
+        await Location.getForegroundPermissionsAsync(),
+        Platform.OS,
+        Platform.OS !== "web" || isBrowserLocationAvailable(),
       );
+      if (nextPermission === "granted" && !(await locationServicesAvailable()))
+        nextPermission = "unavailable";
+      setPermission(nextPermission);
+      if (activeSnapshot && nextPermission !== "granted") {
+        const denied = nextPermission === "denied";
+        setState(denied ? "denied" : "unavailable");
+        setPermissionMessage(
+          denied ? locationDeniedMessage : locationUnavailableMessage,
+        );
+      }
     } catch (error) {
-      setPermission(classifyLocationFailure(error, Platform.OS));
+      const failure = classifyLocationFailure(error, Platform.OS);
+      setPermission(failure);
+      if (activeSnapshot) {
+        setState(failure === "denied" ? "denied" : "unavailable");
+        setPermissionMessage(
+          failure === "denied"
+            ? locationDeniedMessage
+            : locationUnavailableMessage,
+        );
+      }
     }
   };
 
   const pauseRecording = () => {
     if (!activeSnapshot || state !== "active" || pausedRef.current) return;
     pausedRef.current = true;
+    const interval = { startedAt: new Date().toISOString() };
+    pauseIntervalsRef.current.push(interval);
+    openPauseRef.current = interval;
     setIsPaused(true);
     setPosition((current) => ({ ...current, isPaused: true, canPause: true }));
     setStatusMessage(recordingPausedMessage);
@@ -767,6 +908,11 @@ export function useLiveRideSession({
   const resumeRecording = () => {
     if (!activeSnapshot || !pausedRef.current) return;
     pausedRef.current = false;
+    if (openPauseRef.current) {
+      openPauseRef.current.endedAt = new Date().toISOString();
+      openPauseRef.current = null;
+    }
+    lastFixReceivedAtRef.current = Date.now();
     setIsPaused(false);
     setPosition((current) => ({ ...current, isPaused: false, canPause: true }));
     setStatusMessage(recordingResumedMessage);

@@ -40,6 +40,21 @@ export type LiveRideStateEvent =
 
 export type LiveRideLocationFailure = "denied" | "unavailable";
 
+export type LiveRidePermissionState =
+  | "granted"
+  | "denied"
+  | "unavailable"
+  | "undetermined";
+
+export type RidePauseInterval = Readonly<{
+  startedAt: string;
+  endedAt: string;
+}>;
+
+export type LocationWatchdogState = "healthy" | "stale";
+
+export const LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS = 90_000;
+
 export type RecordingOnlyLabels = Readonly<{
   start: string;
   active: string;
@@ -130,6 +145,61 @@ export function classifyLocationFailure(
   return "unavailable";
 }
 
+/** Expo can report a granted status while its explicit granted flag is false. */
+export function permissionStateFromResult(
+  result: unknown,
+  _platform: string = "native",
+  browserLocationAvailable = true,
+): LiveRidePermissionState {
+  const record =
+    result && typeof result === "object"
+      ? (result as { status?: unknown; granted?: unknown })
+      : undefined;
+  const status = String(record?.status ?? "").toLowerCase();
+  if (status === "denied") return "denied";
+  if (status === "granted")
+    return record?.granted === true &&
+      (_platform !== "web" || browserLocationAvailable)
+      ? "granted"
+      : "unavailable";
+  if (status === "undetermined") return "undetermined";
+  return "unavailable";
+}
+
+export function locationWatchdogState({
+  nowMs,
+  startedAtMs,
+  lastFixAtMs,
+  paused = false,
+  timeoutMs = LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS,
+}: {
+  nowMs: number;
+  startedAtMs: number;
+  lastFixAtMs?: number;
+  paused?: boolean;
+  timeoutMs?: number;
+}): LocationWatchdogState {
+  if (paused) return "healthy";
+  const referenceAt = Number.isFinite(lastFixAtMs) ? lastFixAtMs! : startedAtMs;
+  return nowMs - referenceAt >= timeoutMs ? "stale" : "healthy";
+}
+
+export function locationUnavailableCopy(platform = "native", arabic = false) {
+  if (arabic)
+    return platform === "web"
+      ? "الموقع غير متاح في هذا المتصفح. حاول مرة أخرى أو افتح الإعدادات أو تابع بدون موقع."
+      : "الموقع غير متاح. حاول مرة أخرى أو افتح الإعدادات أو تابع بدون موقع.";
+  return platform === "web"
+    ? "Location unavailable in this browser. Try again, open settings where supported, or continue without location."
+    : "Location unavailable. Try again, open settings, or continue without location.";
+}
+
+export function locationUnavailableTitle(platform = "native", arabic = false) {
+  if (arabic)
+    return platform === "web" ? "الموقع غير متاح في هذا المتصفح" : "الموقع غير متاح";
+  return platform === "web" ? "Location unavailable in this browser" : "Location unavailable";
+}
+
 export function isBrowserLocationAvailable(environment?: {
   geolocation?: unknown;
 }) {
@@ -165,8 +235,8 @@ export type LiveRideCompletionState = Exclude<
 export function completionStateForDraft(
   draft: Pick<ActivityDraft, "completionState" | "exportState">,
 ): LiveRideCompletionState {
-  if (draft.exportState === "exported") return "exported";
   if (draft.completionState === "save_failed") return "save-failed";
+  if (draft.exportState === "exported") return "exported";
   if (draft.completionState === "saved") return "saved";
   if (draft.completionState === "discarded") return "discarded";
   return "completed-draft";
@@ -180,6 +250,7 @@ export type CompletionDraftInput = {
   matchHistory?: PositionMatch[];
   analysisSnapshot?: RouteAnalysisSnapshot;
   gaps?: number;
+  pausedIntervals?: readonly RidePauseInterval[];
 };
 
 export function createCompletionDraft(
@@ -190,11 +261,11 @@ export function createCompletionDraft(
   const startedAt = toIso(snapshot.startedAt);
   const samples = clone(input.samples ?? []);
   const matchHistory = clone(input.matchHistory ?? []);
-  const elapsedSeconds = Math.max(
-    0,
-    Math.round(
-      (new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1_000,
-    ),
+  const pausedIntervals = input.pausedIntervals ?? [];
+  const elapsedSeconds = movingDurationSeconds(
+    startedAt,
+    endedAt,
+    pausedIntervals,
   );
   const distanceMeters = recordedDistanceMeters(samples);
   return {
@@ -209,7 +280,7 @@ export function createCompletionDraft(
     elapsedSeconds,
     distanceMeters,
     matchQuality: qualityFromHistory(matchHistory),
-    gaps: Math.max(0, input.gaps ?? 0),
+    gaps: Math.max(0, input.gaps ?? countLocationGaps(samples, 45, pausedIntervals)),
     ...(input.analysisSnapshot
       ? { forecastSnapshot: clone(input.analysisSnapshot) }
       : snapshot.route.analysis
@@ -238,6 +309,7 @@ export function createRecordingOnlyCompletionDraft(
 ): ActivityDraft {
   const endedAt = toIso(input.endedAt);
   const startedAt = toIso(snapshot.startedAt);
+  const pausedIntervals = input.pausedIntervals ?? [];
   const samples = clone(input.samples ?? []);
   const matchHistory = clone(input.matchHistory ?? []);
   return {
@@ -249,15 +321,10 @@ export function createRecordingOnlyCompletionDraft(
     endedAt,
     observedSamples: samples,
     matchHistory,
-    elapsedSeconds: Math.max(
-      0,
-      Math.round(
-        (new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1_000,
-      ),
-    ),
+    elapsedSeconds: movingDurationSeconds(startedAt, endedAt, pausedIntervals),
     distanceMeters: recordedDistanceMeters(samples),
     matchQuality: qualityFromHistory(matchHistory),
-    gaps: Math.max(0, input.gaps ?? 0),
+    gaps: Math.max(0, input.gaps ?? countLocationGaps(samples, 45, pausedIntervals)),
     completionState: "draft",
     exportState: "not_exported",
   };
@@ -279,36 +346,42 @@ export function markActivityExported(draft: ActivityDraft): ActivityDraft {
   return { ...clone(draft), exportState: "exported" };
 }
 
-export function downloadActivityDraft(
+export function exportActivityDraft(
   draft: ActivityDraft,
   environment: BrowserDownloadEnvironment = browserDownloadEnvironment(),
-) {
+): ActivityDraft | null {
   if (
     !environment.Blob ||
     !environment.URL?.createObjectURL ||
     !environment.document
   )
-    return false;
-
-  const payload = JSON.stringify(clone(draft), null, 2);
-  const blob = new environment.Blob([payload], { type: "application/json" });
-  const href = environment.URL.createObjectURL(blob);
-  const link = environment.document.createElement("a");
-  link.href = href;
-  link.download = `ride-${safeFilePart(draft.id)}.json`;
+    return null;
+  let href: string | undefined;
   try {
+    const exportedDraft = markActivityExported(draft);
+    const payload = JSON.stringify(exportedDraft, null, 2);
+    const blob = new environment.Blob([payload], { type: "application/json" });
+    href = environment.URL.createObjectURL(blob);
+    const link = environment.document.createElement("a");
+    link.href = href;
+    link.download = `ride-${safeFilePart(draft.id)}.json`;
     environment.document.body?.appendChild(link);
     link.click();
     environment.document.body?.removeChild(link);
-    return true;
+    return exportedDraft;
   } catch {
-    return false;
+    return null;
   } finally {
-    environment.URL.revokeObjectURL?.(href);
+    if (href !== undefined) environment.URL.revokeObjectURL?.(href);
   }
 }
 
-export const exportActivityDraft = downloadActivityDraft;
+export function downloadActivityDraft(
+  draft: ActivityDraft,
+  environment: BrowserDownloadEnvironment = browserDownloadEnvironment(),
+) {
+  return exportActivityDraft(draft, environment) !== null;
+}
 
 export function recordedDistanceMeters(samples: RecordedSample[]): number {
   let total = 0;
@@ -326,6 +399,7 @@ export function recordedDistanceMeters(samples: RecordedSample[]): number {
 export function countLocationGaps(
   samples: RecordedSample[],
   thresholdSeconds = 45,
+  pausedIntervals: readonly RidePauseInterval[] = [],
 ): number {
   if (samples.length < 2) return 0;
   let gaps = 0;
@@ -335,11 +409,32 @@ export function countLocationGaps(
     if (
       Number.isFinite(previous) &&
       Number.isFinite(current) &&
-      current - previous > thresholdSeconds * 1_000
+      current - previous -
+          pausedMilliseconds(previous, current, pausedIntervals) >
+        thresholdSeconds * 1_000
     )
       gaps += 1;
   }
   return gaps;
+}
+
+export function movingDurationSeconds(
+  startedAt: string | Date,
+  endedAt: string | Date,
+  pausedIntervals: readonly RidePauseInterval[] = [],
+) {
+  const startedMs = new Date(toIso(startedAt)).getTime();
+  const endedMs = new Date(toIso(endedAt)).getTime();
+  if (endedMs <= startedMs) return 0;
+  return Math.max(
+    0,
+    Math.round(
+      (endedMs -
+        startedMs -
+        pausedMilliseconds(startedMs, endedMs, pausedIntervals)) /
+        1_000,
+    ),
+  );
 }
 
 export function qualityFromHistory(
@@ -374,6 +469,39 @@ function toIso(value: string | Date) {
   if (!Number.isFinite(date.getTime()))
     throw new RangeError("Expected a valid ride instant.");
   return date.toISOString();
+}
+
+function pausedMilliseconds(
+  startMs: number,
+  endMs: number,
+  intervals: readonly RidePauseInterval[],
+) {
+  if (endMs <= startMs) return 0;
+  const ranges = intervals
+    .map((interval) => [
+      new Date(interval.startedAt).getTime(),
+      new Date(interval.endedAt).getTime(),
+    ] as const)
+    .filter(
+      ([intervalStart, intervalEnd]) =>
+        Number.isFinite(intervalStart) &&
+        Number.isFinite(intervalEnd) &&
+        intervalEnd > intervalStart,
+    )
+    .map(([intervalStart, intervalEnd]) => [
+      Math.max(startMs, intervalStart),
+      Math.min(endMs, intervalEnd),
+    ] as const)
+    .filter(([intervalStart, intervalEnd]) => intervalEnd > intervalStart)
+    .sort(([firstStart], [secondStart]) => firstStart - secondStart);
+  let coveredMs = 0;
+  let coveredUntil = startMs;
+  for (const [intervalStart, intervalEnd] of ranges) {
+    if (intervalEnd <= coveredUntil) continue;
+    coveredMs += intervalEnd - Math.max(intervalStart, coveredUntil);
+    coveredUntil = intervalEnd;
+  }
+  return coveredMs;
 }
 
 function browserDownloadEnvironment(): BrowserDownloadEnvironment {
