@@ -138,6 +138,26 @@ test('privacy center content names stored, temporary, external, retention, expor
     assert.match(content.deletion.body, /export|مشارك|خارج|إعدادات/i);
   }
 
+  assert.match(
+    getPrivacyCenterCopy('en').temporaryData.body,
+    /Exporting a copy does not automatically discard/i,
+  );
+  assert.match(
+    getPrivacyCenterCopy('en').exportShare.body,
+    /does not automatically discard/i,
+  );
+  assert.match(getPrivacyCenterCopy('en').deletion.body, /preferences/i);
+  assert.match(
+    getPrivacyCenterCopy('en').retention.body,
+    /deleting saved routes or rides does not delete preferences/i,
+  );
+  assert.match(
+    getPrivacyCenterCopy('ar').temporaryData.body,
+    /لا يؤدي التصدير تلقائياً/i,
+  );
+  assert.match(getPrivacyCenterCopy('ar').deletion.body, /التفضيلات/);
+  assert.match(getPrivacyCenterCopy('ar').retention.body, /لا يحذف.*التفضيلات/);
+
   assert.equal(module.STRAVA_OAUTH_CONFIGURED, false);
   assert.equal(getPrivacyCenterCopy('en').strava.configured, false);
   assert.match(getPrivacyCenterCopy('en').strava.body, /OAuth|configured|imported/i);

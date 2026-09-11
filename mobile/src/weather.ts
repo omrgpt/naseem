@@ -22,6 +22,8 @@ export type BahrainConditions = {
 };
 
 export const WEATHER_CACHE_TTL_MS = 10 * 60_000;
+export const WEATHER_CACHE_KEY_DECIMALS = 2;
+export const WEATHER_NETWORK_COORDINATE_DECIMALS = 4;
 export const WEATHER_CACHE_MAX_ENTRIES = 64;
 
 export const WEATHER_REFRESH_DISCLOSURE = {
@@ -33,7 +35,7 @@ export const WEATHER_REFRESH_DISCLOSURE = {
       'https://api.open-meteo.com/v1/forecast',
       'https://air-quality-api.open-meteo.com/v1/air-quality',
     ],
-    coordinates: 'The selected route point, rounded to the weather grid used for the request.',
+    coordinates: 'The selected route point is sent to Open-Meteo rounded to four decimal places for the network request; its in-memory cache key groups points to two decimal places.',
     retention: 'Successful results stay in a bounded in-memory cache for 10 minutes; failed results are not cached.',
   },
   ar: {
@@ -44,7 +46,7 @@ export const WEATHER_REFRESH_DISCLOSURE = {
       'https://api.open-meteo.com/v1/forecast',
       'https://air-quality-api.open-meteo.com/v1/air-quality',
     ],
-    coordinates: 'نقطة المسار المحددة بعد تقريبها إلى شبكة الطقس المستخدمة في الطلب.',
+    coordinates: 'تُرسل نقطة المسار المحددة إلى Open-Meteo بعد تقريبها إلى أربع منازل عشرية لطلب الشبكة؛ ويجمع مفتاح الذاكرة النقاط إلى منزلتين عشريتين.',
     retention: 'تبقى النتائج الناجحة في ذاكرة محدودة لمدة 10 دقائق؛ ولا تُحفظ النتائج الفاشلة في الذاكرة المؤقتة.',
   },
 } as const satisfies Record<Language, ExternalDataFlowDisclosure>;
@@ -153,7 +155,7 @@ const weatherCache = new Map<string, WeatherCacheEntry>();
 const pendingWeather = new Map<string, Promise<BahrainConditions>>();
 
 export function weatherGridKey(latitude: number, longitude: number) {
-  return `${latitude.toFixed(2)},${longitude.toFixed(2)}`;
+  return `${latitude.toFixed(WEATHER_CACHE_KEY_DECIMALS)},${longitude.toFixed(WEATHER_CACHE_KEY_DECIMALS)}`;
 }
 
 export async function getBahrainConditions(
@@ -212,8 +214,8 @@ async function fetchBahrainConditions(
   try {
     const url = new URL('https://api.open-meteo.com/v1/forecast');
     url.search = new URLSearchParams({
-      latitude: latitude.toFixed(4),
-      longitude: longitude.toFixed(4),
+      latitude: latitude.toFixed(WEATHER_NETWORK_COORDINATE_DECIMALS),
+      longitude: longitude.toFixed(WEATHER_NETWORK_COORDINATE_DECIMALS),
       current:
         'temperature_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,wind_gusts_10m',
       hourly:
@@ -270,8 +272,8 @@ async function fetchAirQuality(
   try {
     const airUrl = new URL('https://air-quality-api.open-meteo.com/v1/air-quality');
     airUrl.search = new URLSearchParams({
-      latitude: latitude.toFixed(4),
-      longitude: longitude.toFixed(4),
+      latitude: latitude.toFixed(WEATHER_NETWORK_COORDINATE_DECIMALS),
+      longitude: longitude.toFixed(WEATHER_NETWORK_COORDINATE_DECIMALS),
       current: 'pm2_5,us_aqi',
       timezone: 'Asia/Bahrain',
     }).toString();

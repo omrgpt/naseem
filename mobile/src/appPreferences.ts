@@ -141,7 +141,7 @@ export const PRIVACY_CENTER_CONTENT = {
     },
     temporaryData: {
       title: 'Temporary ride samples',
-      body: 'While an active ride runs, foreground location samples are kept for the session. An unsaved completion draft can keep those precise samples until you save, export, or discard it.',
+      body: 'While an active ride runs, foreground location samples are kept for the session. An unsaved completion draft can keep those precise samples until you save or discard it. Exporting a copy does not automatically discard the draft.',
     },
     locationTiming: {
       title: 'When location is used',
@@ -151,15 +151,15 @@ export const PRIVACY_CENTER_CONTENT = {
     weatherRefresh: WEATHER_REFRESH_DISCLOSURE.en,
     retention: {
       title: 'Retention',
-      body: 'Local routes, rides, preferences, and saved snapshots remain until you delete them. Weather responses cache in memory for 10 minutes and route-analysis responses for 30 seconds; these bounded caches are not saved history.',
+      body: 'Local routes, rides, preferences, and saved snapshots remain on this device; deleting saved routes or rides does not delete preferences. Weather responses cache in memory for 10 minutes and route-analysis responses for 30 seconds; these bounded caches are not saved history.',
     },
     exportShare: {
       title: 'Export and sharing',
-      body: 'Export creates a JSON copy containing preferences, saved routes, saved rides, route and forecast snapshots, and precise recorded location samples. It leaves this device only when you choose a share destination; supported browsers can download a local copy. Naseem does not upload the export itself.',
+      body: 'Export creates a JSON copy containing preferences, saved routes, saved rides, route and forecast snapshots, and precise recorded location samples. It leaves this device only when you choose a share destination; supported browsers can download a local copy. Naseem does not upload the export itself. A pending completion draft remains until you explicitly save or discard it; exporting does not automatically discard it.',
     },
     deletion: {
       title: 'Deletion scope',
-      body: 'The Settings delete action removes saved routes and saved rides from this device; use Discard on a pending completion draft to remove its temporary samples. Language and other preferences stay. Deletion cannot recall an export you already shared or erase provider request logs.',
+      body: 'The Settings delete action removes saved routes and saved rides from this device; it does not delete language or other preferences. Use Discard on a pending completion draft to remove its temporary samples. Deletion cannot recall an export you already shared or erase provider request logs.',
     },
     strava: STRAVA_DISCLOSURE.en,
   },
@@ -172,7 +172,7 @@ export const PRIVACY_CENTER_CONTENT = {
     },
     temporaryData: {
       title: 'عينات الرحلة المؤقتة',
-      body: 'أثناء الرحلة النشطة تُحفظ عينات الموقع الأمامي للجلسة. وقد يحتفظ مسودّ إنجاز غير محفوظ بهذه العينات الدقيقة حتى تحفظه أو تصدّره أو تحذفه.',
+      body: 'أثناء الرحلة النشطة تُحفظ عينات الموقع الأمامي للجلسة. وقد يحتفظ مسودّ إنجاز غير محفوظ بهذه العينات الدقيقة حتى تحفظه أو تحذفه. لا يؤدي التصدير تلقائياً إلى حذف المسودة.',
     },
     locationTiming: {
       title: 'متى يُستخدم الموقع',
@@ -182,15 +182,15 @@ export const PRIVACY_CENTER_CONTENT = {
     weatherRefresh: WEATHER_REFRESH_DISCLOSURE.ar,
     retention: {
       title: 'مدة الاحتفاظ',
-      body: 'تبقى المسارات والرحلات والتفضيلات واللقطات المحفوظة محلياً حتى تحذفها. تُخزّن نتائج الطقس في الذاكرة 10 دقائق ونتائج تحليل المسار 30 ثانية؛ وهذه ذاكرات محدودة وليست سجلاً محفوظاً.',
+      body: 'تبقى المسارات والرحلات والتفضيلات واللقطات المحفوظة على هذا الجهاز؛ ولا يحذف إجراء حذف المسارات والرحلات التفضيلات. تُخزّن نتائج الطقس في الذاكرة 10 دقائق ونتائج تحليل المسار 30 ثانية؛ وهذه ذاكرات محدودة وليست سجلاً محفوظاً.',
     },
     exportShare: {
       title: 'التصدير والمشاركة',
-      body: 'ينشئ التصدير نسخة JSON تتضمن التفضيلات والمسارات والرحلات المحفوظة ولقطات المسار والتوقع وعينات الموقع المسجلة الدقيقة. لا يغادر الملف هذا الجهاز إلا عند اختيار وجهة مشاركة؛ ويمكن للمتصفحات المدعومة تنزيل نسخة محلية. لا يرفع نسيم الملف بنفسه.',
+      body: 'ينشئ التصدير نسخة JSON تتضمن التفضيلات والمسارات والرحلات المحفوظة ولقطات المسار والتوقع وعينات الموقع المسجلة الدقيقة. لا يغادر الملف هذا الجهاز إلا عند اختيار وجهة مشاركة؛ ويمكن للمتصفحات المدعومة تنزيل نسخة محلية. لا يرفع نسيم الملف بنفسه. تبقى مسودة الإنجاز المعلقة حتى تحفظها أو تحذفها صراحةً؛ ولا يؤدي التصدير تلقائياً إلى حذفها.',
     },
     deletion: {
       title: 'نطاق الحذف',
-      body: 'يحذف إجراء حذف الإعدادات المسارات والرحلات المحفوظة من هذا الجهاز؛ استخدم حذف مسودة الإنجاز المعلقة لإزالة عيناتها المؤقتة. تبقى اللغة والتفضيلات الأخرى. ولا يمكن للحذف استرجاع ملف صدّرته أو شاركته أو محو سجلات طلبات المزوّد.',
+      body: 'يحذف إجراء حذف الإعدادات المسارات والرحلات المحفوظة من هذا الجهاز؛ ولا يحذف اللغة أو التفضيلات الأخرى. استخدم حذف مسودة الإنجاز المعلقة لإزالة عيناتها المؤقتة. ولا يمكن للحذف استرجاع ملف صدّرته أو شاركته أو محو سجلات طلبات المزوّد.',
     },
     strava: STRAVA_DISCLOSURE.ar,
   },

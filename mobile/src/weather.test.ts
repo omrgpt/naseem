@@ -59,10 +59,13 @@ test('weather refresh failure exposes provider and coordinate disclosure', async
   const module = (await import('./weather')) as unknown as Record<string, any>;
   const disclosure = module.getWeatherRefreshDisclosure?.('en');
   assert.ok(disclosure);
+  assert.equal(module.WEATHER_NETWORK_COORDINATE_DECIMALS, 4);
   assert.match(disclosure.body, /coordinate/i);
   assert.match(disclosure.body, /Open-Meteo/i);
   assert.ok(disclosure.providerUrls.some((url: string) => url.includes('open-meteo.com')));
   assert.match(disclosure.body, /network|sends/i);
+  assert.match(disclosure.coordinates, /four decimal places/i);
+  assert.match(disclosure.coordinates, /two decimal places/i);
 });
 
 test('weather cache exposes a bounded diagnostic size without exposing cached data', async () => {
