@@ -1,6 +1,7 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Icon, type IconName } from './Icon';
-import type { Palette } from './designTokens';
+import { LIGHT, type Palette } from './designTokens';
 import { FONT_ARABIC_BOLD, FONT_ARABIC_REGULAR, FONT_BOLD, FONT_EXTRABOLD, FONT_MEDIUM, FONT_REGULAR } from './fonts';
 
 type Tone = 'info' | 'success' | 'warning' | 'danger';
@@ -11,6 +12,706 @@ const toneFor = (tone: Tone, palette: Palette) => {
   if (tone === 'success') return { background: palette.accentSoft, foreground: palette.accent };
   return { background: palette.panelAlt, foreground: palette.accent };
 };
+
+type FocusTarget = { focus?: () => void } | null;
+export type AccessibleFocusRef = { current: FocusTarget };
+
+export type AccessibleChoiceOption = {
+  value: string;
+  label: string;
+  hint?: string;
+  disabled?: boolean;
+};
+
+export type AccessibleNavigationItem = {
+  id: string;
+  label: string;
+  icon?: IconName;
+  hint?: string;
+  disabled?: boolean;
+};
+
+export type AccessiblePointItem = {
+  id: string;
+  label: string;
+  detail?: string;
+  disabled?: boolean;
+};
+
+const DEFAULT_PALETTE = LIGHT;
+
+export function isKeyboardActivationKey(key: unknown) {
+  return key === 'Enter' || key === ' ' || key === 'Spacebar' || key === 'Space';
+}
+
+export function choiceIndexForKey(
+  key: unknown,
+  index: number,
+  count: number,
+  rtl = false,
+  disabledIndexes: readonly number[] = [],
+) {
+  if (count <= 0) return null;
+  const disabled = new Set(disabledIndexes);
+  const direction =
+    key === 'ArrowDown' || (!rtl && key === 'ArrowRight') || (rtl && key === 'ArrowLeft')
+      ? 1
+      : key === 'ArrowUp' || (!rtl && key === 'ArrowLeft') || (rtl && key === 'ArrowRight')
+        ? -1
+        : key === 'Home'
+          ? 1
+          : key === 'End'
+            ? -1
+            : 0;
+  if (!direction) return null;
+  let candidate = key === 'Home' ? -1 : key === 'End' ? count : index;
+  for (let step = 0; step < count; step += 1) {
+    candidate = (candidate + direction + count) % count;
+    if (!disabled.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+function getFocusableElements(container: HTMLElement | null) {
+  if (!container) return [];
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+}
+
+type InertSnapshot = {
+  element: HTMLElement;
+  inert: boolean;
+  hadInertAttribute: boolean;
+  ariaHidden: string | null;
+};
+
+function isolateDocumentBackground(dialog: HTMLElement | null) {
+  if (Platform.OS !== 'web' || typeof document === 'undefined' || !dialog) return () => undefined;
+  const snapshots = new Map<HTMLElement, InertSnapshot>();
+  let branch: HTMLElement | null = dialog;
+  while (branch?.parentElement) {
+    const parent: HTMLElement = branch.parentElement;
+    Array.from(parent.children).forEach((child) => {
+      if (!(child instanceof HTMLElement) || child === branch || child.contains(dialog)) return;
+      if (!snapshots.has(child)) {
+        const inertElement = child as HTMLElement & { inert?: boolean };
+        snapshots.set(child, {
+          element: child,
+          inert: Boolean(inertElement.inert),
+          hadInertAttribute: child.hasAttribute('inert'),
+          ariaHidden: child.getAttribute('aria-hidden'),
+        });
+      }
+      const inertElement = child as HTMLElement & { inert?: boolean };
+      inertElement.inert = true;
+      child.setAttribute('inert', '');
+      child.setAttribute('aria-hidden', 'true');
+    });
+    if (parent === document.body) break;
+    branch = parent;
+  }
+  return () => {
+    snapshots.forEach(({ element, inert, hadInertAttribute, ariaHidden }) => {
+      const inertElement = element as HTMLElement & { inert?: boolean };
+      inertElement.inert = inert;
+      if (hadInertAttribute) element.setAttribute('inert', '');
+      else element.removeAttribute('inert');
+      if (ariaHidden === null) element.removeAttribute('aria-hidden');
+      else element.setAttribute('aria-hidden', ariaHidden);
+    });
+  };
+}
+
+function scheduleTask(callback: () => void) {
+  if (typeof requestAnimationFrame === 'function') {
+    const frame = requestAnimationFrame(callback);
+    return () => cancelAnimationFrame(frame);
+  }
+  const timeout = setTimeout(callback, 0);
+  return () => clearTimeout(timeout);
+}
+
+export function AccessibleDialog({
+  visible,
+  title,
+  description,
+  children,
+  onDismiss,
+  onCancel,
+  cancelLabel,
+  palette = DEFAULT_PALETTE,
+  rtl = false,
+  triggerRef,
+  initialFocusRef,
+  titleId,
+  descriptionId,
+  testID,
+  closeOnEscape = true,
+}: {
+  visible: boolean;
+  title: string;
+  description?: string;
+  children?: ReactNode;
+  onDismiss: () => void;
+  onCancel?: () => void;
+  cancelLabel?: string;
+  palette?: Palette;
+  rtl?: boolean;
+  triggerRef?: AccessibleFocusRef;
+  initialFocusRef?: AccessibleFocusRef;
+  titleId?: string;
+  descriptionId?: string;
+  testID?: string;
+  closeOnEscape?: boolean;
+}) {
+  const dialogRef = useRef<any>(null);
+  const generatedId = useId().replace(/:/g, '-');
+  const dialogTitleId = titleId ?? `accessible-dialog-title-${generatedId}`;
+  const dialogDescriptionId = descriptionId ?? `accessible-dialog-description-${generatedId}`;
+  const dismissRef = useRef(onDismiss);
+  const cancelRef = useRef(onCancel);
+  const [cancelFocused, setCancelFocused] = useState(false);
+  dismissRef.current = onDismiss;
+  cancelRef.current = onCancel;
+
+  const handleCancel = useCallback(() => {
+    cancelRef.current?.() ?? dismissRef.current();
+  }, []);
+
+  const focusInitial = useCallback(() => {
+    const explicitTarget = initialFocusRef?.current;
+    if (explicitTarget?.focus) {
+      explicitTarget.focus();
+      return;
+    }
+    const dialogElement =
+      Platform.OS === 'web' && typeof HTMLElement !== 'undefined' && dialogRef.current instanceof HTMLElement
+        ? (dialogRef.current as HTMLElement)
+        : null;
+    const firstFocusable = getFocusableElements(dialogElement)[0];
+    if (firstFocusable) {
+      firstFocusable.focus();
+      return;
+    }
+    dialogRef.current?.focus?.();
+  }, [initialFocusRef]);
+
+  const handleDialogKeyDown = useCallback(
+    (event: any) => {
+      if (event?.defaultPrevented) return;
+      const key = event?.key;
+      if (key === 'Escape' && closeOnEscape) {
+        event.preventDefault?.();
+        handleCancel();
+        return;
+      }
+      if (key !== 'Tab') return;
+      const dialogElement =
+        Platform.OS === 'web' && typeof HTMLElement !== 'undefined' && dialogRef.current instanceof HTMLElement
+          ? (dialogRef.current as HTMLElement)
+          : null;
+      const focusable = getFocusableElements(dialogElement);
+      if (!focusable.length) {
+        event.preventDefault?.();
+        dialogRef.current?.focus?.();
+        return;
+      }
+      const current = typeof document !== 'undefined' ? document.activeElement : null;
+      const currentIndex = focusable.indexOf(current as HTMLElement);
+      const nextIndex = event.shiftKey
+        ? currentIndex <= 0
+          ? focusable.length - 1
+          : currentIndex - 1
+        : currentIndex === focusable.length - 1 || currentIndex < 0
+          ? 0
+          : currentIndex + 1;
+      event.preventDefault?.();
+      focusable[nextIndex]?.focus();
+    },
+    [closeOnEscape, handleCancel],
+  );
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    const isWeb = Platform.OS === 'web' && typeof document !== 'undefined';
+    const activeBeforeOpen = isWeb ? (document.activeElement as HTMLElement | null) : null;
+    const restoreBackground = isWeb
+      ? isolateDocumentBackground(
+          typeof HTMLElement !== 'undefined' && dialogRef.current instanceof HTMLElement
+            ? (dialogRef.current as HTMLElement)
+            : null,
+        )
+      : () => undefined;
+    const cancelInitialFocus = scheduleTask(focusInitial);
+    const handleDocumentKeyDown = (event: KeyboardEvent) => handleDialogKeyDown(event);
+    if (isWeb) document.addEventListener('keydown', handleDocumentKeyDown, true);
+    return () => {
+      cancelInitialFocus();
+      if (isWeb) document.removeEventListener('keydown', handleDocumentKeyDown, true);
+      restoreBackground();
+      scheduleTask(() => {
+        const target = triggerRef?.current;
+        if (target?.focus) target.focus();
+        else activeBeforeOpen?.focus();
+      });
+    };
+  }, [focusInitial, handleDialogKeyDown, triggerRef, visible]);
+
+  if (!visible) return null;
+
+  const dialogContent = (
+    <Pressable
+      accessible={false}
+      onPress={(event: any) => {
+        if (event?.target === event?.currentTarget) handleCancel();
+      }}
+      style={styles.dialogBackdrop}
+    >
+      <View
+        ref={dialogRef}
+        testID={testID}
+        accessible
+        accessibilityLabel={title}
+        accessibilityLabelledBy={dialogTitleId}
+        accessibilityViewIsModal
+        accessibilityRole="none"
+        onAccessibilityEscape={handleCancel}
+        {...({ onKeyDown: handleDialogKeyDown } as any)}
+        role="dialog"
+        aria-modal={true}
+        aria-labelledby={dialogTitleId}
+        {...(description ? { 'aria-describedby': dialogDescriptionId } : {})}
+        tabIndex={-1}
+        style={[styles.dialogCard, { backgroundColor: palette.bg, borderColor: palette.line }, rtl && styles.rtl]}
+      >
+        <Text nativeID={dialogTitleId} accessibilityRole="header" role="heading" style={[styles.dialogTitle, { color: palette.ink }, rtl && styles.textRight]}>
+          {title}
+        </Text>
+        {description ? (
+          <Text nativeID={dialogDescriptionId} style={[styles.dialogDescription, { color: palette.muted }, rtl && styles.textRight]}>
+            {description}
+          </Text>
+        ) : null}
+        <View style={styles.dialogBody}>{children}</View>
+        {cancelLabel ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={cancelLabel}
+            onPress={handleCancel}
+            onFocus={() => setCancelFocused(true)}
+            onBlur={() => setCancelFocused(false)}
+            style={({ pressed }) => [styles.dialogCancel, cancelFocused && styles.focusRing, { borderColor: palette.line, opacity: pressed ? 0.78 : 1 }]}
+          >
+            <Text style={[styles.dialogCancelText, { color: palette.ink }, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{cancelLabel}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    </Pressable>
+  );
+
+  return Platform.OS === 'web' ? (
+    dialogContent
+  ) : (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={handleCancel} onShow={focusInitial}>
+      {dialogContent}
+    </Modal>
+  );
+}
+
+export function AccessibleChoiceGroup({
+  label,
+  options,
+  value,
+  onChange,
+  palette = DEFAULT_PALETTE,
+  rtl = false,
+}: {
+  label: string;
+  options: readonly AccessibleChoiceOption[];
+  value: string | null | undefined;
+  onChange: (value: string) => void;
+  palette?: Palette;
+  rtl?: boolean;
+}) {
+  const selectedIndex = options.findIndex((option) => option.value === value && !option.disabled);
+  const firstEnabledIndex = options.findIndex((option) => !option.disabled);
+  const activeIndex = selectedIndex >= 0 ? selectedIndex : Math.max(0, firstEnabledIndex);
+  const optionRefs = useRef<Array<any>>([]);
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+  const disabledIndexes = options.flatMap((option, index) => (option.disabled ? [index] : []));
+
+  const selectOption = (index: number) => {
+    const option = options[index];
+    if (!option || option.disabled) return;
+    onChange(option.value);
+    optionRefs.current[index]?.focus?.();
+  };
+
+  const handleOptionKeyDown = (event: any, index: number) => {
+    if (isKeyboardActivationKey(event?.key)) {
+      event.preventDefault?.();
+      selectOption(index);
+      return;
+    }
+    const nextIndex = choiceIndexForKey(event?.key, index, options.length, rtl, disabledIndexes);
+    if (nextIndex === null) return;
+    event.preventDefault?.();
+    selectOption(nextIndex);
+  };
+
+  return (
+    <View
+      accessibilityRole="radiogroup"
+      accessibilityLabel={label}
+      role="radiogroup"
+      {...({ 'aria-orientation': 'vertical' } as any)}
+      style={styles.choiceGroup}
+    >
+      <Text style={[styles.choiceGroupLabel, { color: palette.ink }, rtl && styles.textRight]}>{label}</Text>
+      {options.map((option, index) => {
+        const selected = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            ref={(node) => {
+              optionRefs.current[index] = node;
+            }}
+            accessible
+            accessibilityRole="radio"
+            accessibilityLabel={option.label}
+            accessibilityHint={option.hint}
+            accessibilityState={{ selected, checked: selected, disabled: option.disabled }}
+            role="radio"
+            aria-checked={selected}
+            aria-disabled={option.disabled || undefined}
+            tabIndex={index === activeIndex ? 0 : -1}
+            disabled={option.disabled}
+            onPress={() => selectOption(index)}
+            {...({ onKeyDown: (event: any) => handleOptionKeyDown(event, index) } as any)}
+            onFocus={() => setFocusedIndex(index)}
+            onBlur={() => setFocusedIndex(null)}
+            style={({ pressed }) => [
+              styles.choiceOption,
+              { backgroundColor: palette.panel, borderColor: palette.line, opacity: option.disabled ? 0.48 : pressed ? 0.78 : 1 },
+              selected && { backgroundColor: palette.accentSoft, borderColor: palette.accent },
+              focusedIndex === index && styles.focusRing,
+              rtl && styles.rtl,
+            ]}
+          >
+            <View style={[styles.choiceIndicator, { borderColor: selected ? palette.accent : palette.muted }]}>
+              {selected ? <View style={[styles.choiceIndicatorDot, { backgroundColor: palette.accent }]} /> : null}
+            </View>
+            <View style={styles.choiceCopy}>
+              <Text style={[styles.choiceLabel, { color: palette.ink }, rtl && styles.textRight]}>{option.label}</Text>
+              {option.hint ? <Text style={[styles.choiceHint, { color: palette.muted }, rtl && styles.textRight]}>{option.hint}</Text> : null}
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+export function AccessibleSwitch({
+  label,
+  value,
+  onValueChange,
+  hint,
+  palette = DEFAULT_PALETTE,
+  rtl = false,
+  disabled = false,
+}: {
+  label: string;
+  value: boolean;
+  onValueChange: (value: boolean) => void;
+  hint?: string;
+  palette?: Palette;
+  rtl?: boolean;
+  disabled?: boolean;
+}) {
+  const [focused, setFocused] = useState(false);
+  const handleKeyDown = (event: any) => {
+    if (disabled || !isKeyboardActivationKey(event?.key)) return;
+    event.preventDefault?.();
+    onValueChange(!value);
+  };
+  return (
+    <Pressable
+      accessible
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityHint={hint}
+      accessibilityState={{ checked: value, disabled }}
+      role="switch"
+      aria-checked={value}
+      aria-disabled={disabled || undefined}
+      {...({ 'aria-keyshortcuts': 'Space Enter' } as any)}
+      disabled={disabled}
+      onPress={() => onValueChange(!value)}
+      {...({ onKeyDown: handleKeyDown } as any)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={({ pressed }) => [styles.switch, { backgroundColor: palette.panel, borderColor: palette.line, opacity: disabled ? 0.48 : pressed ? 0.78 : 1 }, focused && styles.focusRing, rtl && styles.rtl]}
+    >
+      <View style={[styles.switchTrack, { backgroundColor: value ? palette.accent : palette.line }]}>
+        <View style={[styles.switchThumb, { backgroundColor: palette.bg, transform: [{ translateX: value ? 18 : 2 }] }]} />
+      </View>
+      <Text style={[styles.switchLabel, { color: palette.ink }, rtl && styles.textRight]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+export function AccessibleNavigation({
+  items,
+  currentId,
+  onChange,
+  label = 'Primary navigation',
+  palette = DEFAULT_PALETTE,
+  rtl = false,
+}: {
+  items: readonly AccessibleNavigationItem[];
+  currentId: string;
+  onChange: (id: string) => void;
+  label?: string;
+  palette?: Palette;
+  rtl?: boolean;
+}) {
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+
+  return (
+    <View role="navigation" accessibilityLabel={label} style={[styles.navigation, { backgroundColor: palette.nav, borderColor: palette.line }, rtl && styles.rtl]}>
+      {items.map((item) => {
+        const current = item.id === currentId;
+        return (
+          <Pressable
+            key={item.id}
+            accessibilityRole="link"
+            accessibilityLabel={item.label}
+            accessibilityHint={item.hint}
+            accessibilityState={{ selected: current, disabled: item.disabled }}
+            role="link"
+            {...({ 'aria-current': current ? 'page' : undefined } as any)}
+            disabled={item.disabled}
+            onPress={() => onChange(item.id)}
+            onFocus={() => setFocusedId(item.id)}
+            onBlur={() => setFocusedId(null)}
+            style={({ pressed }) => [
+              styles.navigationItem,
+              { opacity: item.disabled ? 0.48 : pressed ? 0.78 : 1 },
+              current && { backgroundColor: palette.accentSoft },
+              focusedId === item.id && styles.focusRing,
+            ]}
+          >
+            {item.icon ? <Icon name={item.icon} color={current ? palette.accent : palette.muted} size={18} /> : null}
+            <Text style={[styles.navigationLabel, { color: current ? palette.accent : palette.muted }, current && { fontFamily: FONT_BOLD }, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{item.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+export function AccessibleHeading({
+  children,
+  level = 2,
+  style,
+}: {
+  children: ReactNode;
+  level?: 1 | 2 | 3 | 4 | 5 | 6;
+  style?: any;
+}) {
+  return (
+    <Text accessibilityRole="header" role="heading" {...({ 'aria-level': level } as any)} style={[styles.heading, style]}>
+      {children}
+    </Text>
+  );
+}
+
+export function AccessibleLandmark({
+  children,
+  role,
+  label,
+  nativeID,
+  style,
+}: {
+  children: ReactNode;
+  role: 'banner' | 'main' | 'navigation' | 'complementary' | 'contentinfo' | 'region' | 'search' | 'form';
+  label?: string;
+  nativeID?: string;
+  style?: any;
+}) {
+  return (
+    <View role={role as any} accessibilityLabel={label} nativeID={nativeID} style={[styles.landmark, style]}>
+      {children}
+    </View>
+  );
+}
+
+export function SkipToContent({
+  label = 'Skip to content',
+  targetId = 'main-content',
+  targetRef,
+  onSkip,
+}: {
+  label?: string;
+  targetId?: string;
+  targetRef?: AccessibleFocusRef;
+  onSkip?: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const handleSkip = (event?: any) => {
+    event?.preventDefault?.();
+    onSkip?.();
+    if (targetRef?.current?.focus) targetRef.current.focus();
+    else if (Platform.OS === 'web' && typeof document !== 'undefined') document.getElementById(targetId)?.focus();
+  };
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={label}
+      role="link"
+      {...({ href: `#${targetId}` } as any)}
+      onPress={handleSkip}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={[styles.skipLink, focused && styles.skipLinkVisible]}
+    >
+      <Text style={styles.skipLinkText}>{label}</Text>
+    </Pressable>
+  );
+}
+
+export function AccessibleLiveRegion({
+  message,
+  kind = 'status',
+}: {
+  message: string;
+  kind?: 'status' | 'error';
+}) {
+  const isError = kind === 'error';
+  const liveRole = isError ? 'alert' : 'status';
+  const liveRegion = isError ? 'assertive' : 'polite';
+  return (
+    <View
+      accessible
+      accessibilityLabel={message}
+      accessibilityLiveRegion={liveRegion}
+      accessibilityRole={isError ? 'alert' : 'text'}
+      role={liveRole}
+      aria-live={liveRegion}
+      aria-atomic={true}
+      style={styles.liveRegion}
+    >
+      <Text>{message}</Text>
+    </View>
+  );
+}
+
+export function AccessibleMapMarker({
+  label,
+  onSelect,
+  selected = false,
+  children,
+  palette = DEFAULT_PALETTE,
+}: {
+  label: string;
+  onSelect: () => void;
+  selected?: boolean;
+  children?: ReactNode;
+  palette?: Palette;
+}) {
+  const [focused, setFocused] = useState(false);
+
+  const handleKeyDown = (event: any) => {
+    if (!isKeyboardActivationKey(event?.key)) return;
+    event.preventDefault?.();
+    onSelect();
+  };
+  return (
+    <Pressable
+      accessible
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected }}
+      role="button"
+      aria-pressed={selected}
+      hitSlop={4}
+      onPress={onSelect}
+      {...({ onKeyDown: handleKeyDown } as any)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={({ pressed }) => [styles.mapMarker, { backgroundColor: palette.panel, borderColor: selected ? palette.accent : palette.line, opacity: pressed ? 0.78 : 1 }, focused && styles.focusRing]}
+    >
+      {children ?? <Text style={[styles.mapMarkerText, { color: palette.ink }]}>{label}</Text>}
+    </Pressable>
+  );
+}
+
+export function AccessiblePointList({
+  label,
+  points,
+  selectedId,
+  onSelect,
+  palette = DEFAULT_PALETTE,
+  rtl = false,
+  selectedAnnouncement,
+}: {
+  label: string;
+  points: readonly AccessiblePointItem[];
+  selectedId?: string | null;
+  onSelect: (id: string) => void;
+  palette?: Palette;
+  rtl?: boolean;
+  selectedAnnouncement?: string;
+}) {
+  const [focusedPointId, setFocusedPointId] = useState<string | null>(null);
+
+  const selectedPoint = points.find((point) => point.id === selectedId);
+  const announcement = selectedAnnouncement ?? (selectedPoint ? `${selectedPoint.label} selected` : '');
+  return (
+    <View accessibilityRole="list" accessibilityLabel={label} role="list" style={styles.pointList}>
+      <Text style={[styles.pointListLabel, { color: palette.ink }, rtl && styles.textRight]}>{label}</Text>
+      {points.map((point, index) => {
+        const selected = point.id === selectedId;
+        const handleKeyDown = (event: any) => {
+          if (!isKeyboardActivationKey(event?.key)) return;
+          event.preventDefault?.();
+          if (!point.disabled) onSelect(point.id);
+        };
+        return (
+          <Pressable
+            key={point.id}
+            accessibilityRole="button"
+            accessibilityLabel={point.detail ? `${point.label}. ${point.detail}` : point.label}
+            accessibilityState={{ selected, disabled: point.disabled }}
+            role="button"
+            aria-pressed={selected}
+            aria-disabled={point.disabled || undefined}
+            {...({ 'aria-posinset': index + 1, 'aria-setsize': points.length } as any)}
+            disabled={point.disabled}
+            onPress={() => onSelect(point.id)}
+            {...({ onKeyDown: handleKeyDown } as any)}
+            onFocus={() => setFocusedPointId(point.id)}
+            onBlur={() => setFocusedPointId(null)}
+            style={({ pressed }) => [styles.pointListItem, { borderColor: palette.line, opacity: point.disabled ? 0.48 : pressed ? 0.78 : 1 }, selected && { backgroundColor: palette.accentSoft, borderColor: palette.accent }, focusedPointId === point.id && styles.focusRing, rtl && styles.rtl]}
+          >
+            <View style={[styles.pointListIndex, { backgroundColor: selected ? palette.accent : palette.ink }]}>
+              <Text style={[styles.pointListIndexText, { color: palette.bg }]}>{index + 1}</Text>
+            </View>
+            <View style={styles.pointListCopy}>
+              <Text style={[styles.pointListItemLabel, { color: palette.ink }, rtl && styles.textRight]}>{point.label}</Text>
+              {point.detail ? <Text style={[styles.pointListItemDetail, { color: palette.muted }, rtl && styles.textRight]}>{point.detail}</Text> : null}
+            </View>
+          </Pressable>
+        );
+      })}
+      <AccessibleLiveRegion message={announcement} />
+    </View>
+  );
+}
 
 export function NoticeAlert({
   tone = 'info',
@@ -96,12 +797,17 @@ export function ButtonWithIcon({
   const primary = variant === 'primary';
   const danger = variant === 'danger';
   const foreground = primary ? palette.bg : danger ? palette.caution : palette.ink;
+  const [focused, setFocused] = useState(false);
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
       accessibilityState={{ disabled }}
+      role="button"
       disabled={disabled}
       onPress={onPress}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={({ pressed }) => [
         styles.button,
         {
@@ -109,6 +815,7 @@ export function ButtonWithIcon({
           borderColor: danger ? palette.caution : primary ? palette.ink : palette.line,
           opacity: disabled ? 0.55 : pressed ? 0.82 : 1,
         },
+        focused && styles.focusRing,
         rtl && styles.rtl,
       ]}
     >
@@ -164,12 +871,23 @@ export function ProgressReadout({
   rtl?: boolean;
 }) {
   const boundedProgress = Math.max(0, Math.min(1, progress));
+  const progressAccessibilityLabel = `${label}: ${value}. ${subtitle}`;
   return (
     <View style={[styles.progressCard, { backgroundColor: palette.ink }, rtl && styles.rtl]}>
       <Text style={[styles.progressLabel, { color: palette.bg }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{label}</Text>
       <Text style={[styles.progressValue, { color: palette.bg }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{value}</Text>
       <Text style={[styles.progressSubtitle, { color: palette.bg }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_REGULAR }]}>{subtitle}</Text>
-      <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 1, now: boundedProgress }} style={[styles.progressTrack, { backgroundColor: palette.line }]}>
+      <View
+        accessible
+        accessibilityRole="progressbar"
+        accessibilityLabel={progressAccessibilityLabel}
+        accessibilityLiveRegion="polite"
+        accessibilityValue={{ min: 0, max: 1, now: boundedProgress, text: value }}
+        role="progressbar"
+        aria-live="polite"
+        aria-valuetext={value}
+        style={[styles.progressTrack, { backgroundColor: palette.line }]}
+      >
         <View style={[styles.progressFill, { backgroundColor: palette.accent, width: `${boundedProgress * 100}%` }]} />
       </View>
     </View>
@@ -179,6 +897,45 @@ export function ProgressReadout({
 const styles = StyleSheet.create({
   rtl: { flexDirection: 'row-reverse' },
   textRight: { textAlign: 'right' },
+  dialogBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, backgroundColor: 'rgba(16, 42, 46, 0.72)' },
+  dialogCard: { width: '100%', maxWidth: 520, gap: 14, padding: 20, borderWidth: 1, borderRadius: 22 },
+  dialogTitle: { fontFamily: FONT_BOLD, fontSize: 20, lineHeight: 27, fontWeight: '900' },
+  dialogDescription: { fontFamily: FONT_REGULAR, fontSize: 14, lineHeight: 21 },
+  dialogBody: { gap: 10 },
+  dialogCancel: { minHeight: 44, minWidth: 88, alignSelf: 'flex-end', paddingHorizontal: 14, borderWidth: 1, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  dialogCancelText: { fontFamily: FONT_BOLD, fontSize: 13, lineHeight: 20, fontWeight: '700' },
+  focusRing: { borderWidth: 2, borderColor: '#087A74', shadowColor: '#087A74', shadowOpacity: 0.35, shadowRadius: 3 },
+  choiceGroup: { gap: 8 },
+  choiceGroupLabel: { fontFamily: FONT_BOLD, fontSize: 14, lineHeight: 21, fontWeight: '700' },
+  choiceOption: { minHeight: 44, minWidth: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderRadius: 13 },
+  choiceIndicator: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  choiceIndicatorDot: { width: 10, height: 10, borderRadius: 5 },
+  choiceCopy: { flex: 1, gap: 1 },
+  choiceLabel: { fontFamily: FONT_MEDIUM, fontSize: 13, lineHeight: 20, fontWeight: '600' },
+  choiceHint: { fontFamily: FONT_REGULAR, fontSize: 12, lineHeight: 18 },
+  switch: { minHeight: 44, minWidth: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderRadius: 13 },
+  switchTrack: { width: 40, height: 24, borderRadius: 12, justifyContent: 'center' },
+  switchThumb: { width: 20, height: 20, borderRadius: 10 },
+  switchLabel: { flex: 1, fontFamily: FONT_MEDIUM, fontSize: 13, lineHeight: 20, fontWeight: '600' },
+  navigation: { minHeight: 78, flexDirection: 'row', alignItems: 'stretch', justifyContent: 'space-around', gap: 4, padding: 6, borderWidth: 1, borderRadius: 21 },
+  navigationItem: { minHeight: 44, minWidth: 44, flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: 8, borderRadius: 13 },
+  navigationLabel: { fontFamily: FONT_MEDIUM, fontSize: 11, lineHeight: 18, fontWeight: '500' },
+  heading: { fontFamily: FONT_BOLD, fontSize: 20, lineHeight: 27, fontWeight: '700' },
+  landmark: { width: '100%' },
+  skipLink: { position: 'absolute', top: -80, left: 16, zIndex: 1000, minHeight: 44, minWidth: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#102A2E', alignItems: 'center', justifyContent: 'center' },
+  skipLinkVisible: { top: 8 },
+  skipLinkText: { color: '#FFFFFF', fontFamily: FONT_BOLD, fontSize: 13, lineHeight: 20, fontWeight: '700' },
+  liveRegion: { minHeight: 1 },
+  mapMarker: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center', padding: 4, borderWidth: 1, borderRadius: 22 },
+  mapMarkerText: { fontFamily: FONT_BOLD, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  pointList: { gap: 8 },
+  pointListLabel: { fontFamily: FONT_BOLD, fontSize: 14, lineHeight: 21, fontWeight: '700' },
+  pointListItem: { minHeight: 44, minWidth: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderRadius: 13 },
+  pointListIndex: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  pointListIndexText: { fontFamily: FONT_BOLD, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  pointListCopy: { flex: 1, gap: 1 },
+  pointListItemLabel: { fontFamily: FONT_MEDIUM, fontSize: 13, lineHeight: 20, fontWeight: '600' },
+  pointListItemDetail: { fontFamily: FONT_REGULAR, fontSize: 12, lineHeight: 18 },
   notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 14, borderWidth: 1, borderRadius: 16 },
   noticeDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5 },
   noticeCopy: { flex: 1, gap: 3 },

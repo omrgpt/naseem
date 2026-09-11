@@ -2,6 +2,23 @@ import { Platform, StyleSheet } from 'react-native';
 import type { Palette } from './designTokens';
 import { FONT_ARABIC_BOLD, FONT_ARABIC_MEDIUM, FONT_ARABIC_REGULAR, FONT_ARABIC_SEMIBOLD, FONT_BOLD as LATIN_BOLD, FONT_EXTRABOLD as LATIN_EXTRABOLD, FONT_MEDIUM as LATIN_MEDIUM, FONT_REGULAR as LATIN_REGULAR, FONT_SEMIBOLD as LATIN_SEMIBOLD } from './fonts';
 
+export const MIN_TOUCH_TARGET = 44;
+export const PHONE_BOTTOM_SAFE_ZONE = 112;
+export const DESKTOP_BOTTOM_SAFE_ZONE = 128;
+export const BOTTOM_NAV_SAFE_ZONE = DESKTOP_BOTTOM_SAFE_ZONE;
+export const SHEET_SAFE_ZONE = 96;
+
+const bottomSafeAreaStyle = {
+  paddingBottom: Platform.OS === 'web'
+    ? (`max(${PHONE_BOTTOM_SAFE_ZONE}px, env(safe-area-inset-bottom))` as any)
+    : BOTTOM_NAV_SAFE_ZONE,
+};
+const sheetSafeAreaStyle = {
+  paddingBottom: Platform.OS === 'web'
+    ? (`max(${SHEET_SAFE_ZONE}px, env(safe-area-inset-bottom))` as any)
+    : SHEET_SAFE_ZONE,
+};
+
 export function createScreenStyles(palette: Palette, rtl = false) {
   const regular = rtl ? FONT_ARABIC_REGULAR : LATIN_REGULAR;
   const medium = rtl ? FONT_ARABIC_MEDIUM : LATIN_MEDIUM;
@@ -9,7 +26,9 @@ export function createScreenStyles(palette: Palette, rtl = false) {
   const bold = rtl ? FONT_ARABIC_BOLD : LATIN_BOLD;
   const extraBold = rtl ? FONT_ARABIC_BOLD : LATIN_EXTRABOLD;
   return StyleSheet.create({
-    screen: { gap: 14, paddingHorizontal: 16, paddingTop: 16, paddingBottom: 26 },
+    screen: { gap: 14, paddingHorizontal: 16, paddingTop: 16, paddingBottom: BOTTOM_NAV_SAFE_ZONE },
+    safeAreaContent: bottomSafeAreaStyle,
+    sheetSafeArea: sheetSafeAreaStyle,
     // The web document carries the canonical direction. Keep the native
     // container direction only where React Native supports it directly.
     screenRtl: Platform.OS === 'web' ? {} : ({ direction: 'rtl' } as any),
@@ -18,6 +37,17 @@ export function createScreenStyles(palette: Palette, rtl = false) {
     title: { color: palette.ink, fontFamily: extraBold, fontSize: 28, lineHeight: rtl ? 38 : 33, fontWeight: '800' },
     subtitle: { color: palette.muted, fontFamily: regular, fontSize: 14, lineHeight: 21 },
     textRight: { textAlign: 'right' },
+    heading: { color: palette.ink, fontFamily: bold, fontSize: 20, lineHeight: rtl ? 30 : 27, fontWeight: '700' },
+    landmark: { width: '100%' },
+    skipLink: { position: 'absolute', top: -80, left: 16, zIndex: 1000, minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET, paddingHorizontal: 14, borderRadius: 12, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
+    skipLinkVisible: { top: 8 },
+    skipLinkText: { color: palette.bg, fontFamily: bold, fontSize: 13, lineHeight: 20, fontWeight: '700' },
+    focusRing: { borderWidth: 2, borderColor: palette.accent, shadowColor: palette.accent, shadowOpacity: 0.35, shadowRadius: 3 },
+    navigation: { minHeight: 78, flexDirection: 'row', alignItems: 'stretch', justifyContent: 'space-around', gap: 4, padding: 6, borderWidth: 1, borderRadius: 21 },
+    navigationItem: { minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET, flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, paddingHorizontal: 8, borderRadius: 13 },
+    navigationLabel: { color: palette.muted, fontFamily: medium, fontSize: 11, lineHeight: 18, fontWeight: '500' },
+    mapPointList: { gap: 8, paddingBottom: SHEET_SAFE_ZONE },
+    mapPoint: { minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET, borderWidth: 1, borderRadius: 13, paddingHorizontal: 10, paddingVertical: 7 },
     row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
     rowRtl: { flexDirection: 'row-reverse' },
@@ -79,10 +109,10 @@ export function createScreenStyles(palette: Palette, rtl = false) {
     manualScreen: { flex: 1, minHeight: 0, gap: 12, paddingBottom: 0 },
     manualMapViewport: { flexShrink: 0, width: '100%' },
     manualControlTray: { flex: 1, minHeight: 0, width: '100%' },
-    manualControlTrayContent: { gap: 12, paddingBottom: 24 },
+    manualControlTrayContent: { gap: 12, paddingBottom: SHEET_SAFE_ZONE },
     manualTitle: { color: palette.ink, fontFamily: bold, fontSize: 15, lineHeight: 22, fontWeight: '700' },
     manualActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    smallButton: { minHeight: 44, paddingHorizontal: 12, borderRadius: 11, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.panel, justifyContent: 'center', alignItems: 'center' },
+    smallButton: { minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET, paddingHorizontal: 12, borderRadius: 11, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.panel, justifyContent: 'center', alignItems: 'center' },
     smallButtonText: { color: palette.ink, fontFamily: semibold, fontSize: rtl ? 13 : 12, lineHeight: rtl ? 20 : 18, fontWeight: '600' },
     smallButtonDisabled: { opacity: 0.4 },
     pointRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: palette.line },
@@ -92,7 +122,7 @@ export function createScreenStyles(palette: Palette, rtl = false) {
     pointName: { color: palette.ink, fontFamily: semibold, fontSize: 13, lineHeight: 19, fontWeight: '600' },
     pointMeta: { color: palette.muted, fontFamily: regular, fontSize: rtl ? 12 : 10, lineHeight: rtl ? 18 : 15 },
     pointActions: { flexDirection: 'row', gap: 4 },
-    pointActionButton: { minHeight: 44, minWidth: 44, borderRadius: 11, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.panel, alignItems: 'center', justifyContent: 'center' },
+    pointActionButton: { minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET, borderRadius: 11, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.panel, alignItems: 'center', justifyContent: 'center' },
     pointActionText: { color: palette.ink, fontFamily: bold, fontSize: 16, lineHeight: 20, fontWeight: '700' },
     detailHeader: { gap: 4 },
     detailActions: { gap: 8 },
@@ -174,7 +204,7 @@ export function createScreenStyles(palette: Palette, rtl = false) {
     decisionItemText: { flex: 1, color: palette.ink, fontFamily: regular, fontSize: 12, lineHeight: 19 },
     sourceButton: { minHeight: 44, borderRadius: 12, paddingHorizontal: 12, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
     sourceButtonText: { color: palette.bg, fontFamily: bold, fontSize: 12, lineHeight: 18, fontWeight: '700' },
-    linkButton: { minHeight: 40, justifyContent: 'center', paddingHorizontal: 6 },
+    linkButton: { minHeight: MIN_TOUCH_TARGET, minWidth: MIN_TOUCH_TARGET, justifyContent: 'center', paddingHorizontal: 6 },
     linkButtonText: { color: palette.accent, fontFamily: bold, fontSize: 12, lineHeight: 18, fontWeight: '700' },
     disabled: { opacity: 0.45 },
     // Route Atlas: the map carries the visual weight; one sheet explains it.
@@ -184,7 +214,7 @@ export function createScreenStyles(palette: Palette, rtl = false) {
     atlasTopbarRtl: { flexDirection: 'row-reverse' },
     atlasMapButton: { minHeight: 44, borderRadius: 13, paddingHorizontal: 12, justifyContent: 'center', backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.line, shadowColor: palette.shadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8 },
     atlasMapButtonText: { color: palette.ink, fontFamily: semibold, fontSize: 13, lineHeight: 20, fontWeight: '600' },
-    atlasSheet: { marginTop: -28, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: palette.bg, paddingHorizontal: 16, paddingTop: 9, paddingBottom: 18, gap: 13, minHeight: 235 },
+    atlasSheet: { marginTop: -28, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: palette.bg, paddingHorizontal: 16, paddingTop: 9, paddingBottom: SHEET_SAFE_ZONE, gap: 13, minHeight: 235 },
     atlasSheetExpanded: { minHeight: 410 },
     atlasSheetHandle: { alignSelf: 'stretch', minHeight: 30, justifyContent: 'center', alignItems: 'center', gap: 5 },
     atlasHandle: { width: 38, height: 4, borderRadius: 4, backgroundColor: palette.line },

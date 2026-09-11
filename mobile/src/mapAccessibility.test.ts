@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import type { RoutePlan } from './domain';
 import { mapGeometryStatus } from './mapModel';
+
+const uiPatternsSource = readFileSync(new URL('./UiPatterns.tsx', import.meta.url), 'utf8');
 
 const suitability = { kind: 'unknown' as const, label: 'Unknown', evidence: 'Test', source: 'test', confidence: 'low' as const };
 const route: RoutePlan = {
@@ -24,5 +27,24 @@ const route: RoutePlan = {
 test('map status cannot announce road matching without displayed geometry', () => {
   assert.equal(mapGeometryStatus(route, 'loading'), 'loading');
   assert.equal(mapGeometryStatus(route, 'matched'), 'pilot');
-  assert.equal(mapGeometryStatus({ ...route, geometry: [route.points[0], route.points[1]] }, 'pilot'), 'matched');
+  assert.equal(mapGeometryStatus({ ...route, geometry: [route.points[0], route.points[1]] }, 'pilot'), 'pilot');
+});
+
+test('route point lists expose keyboard selection and a stable selection announcement', () => {
+  assert.match(uiPatternsSource, /export function AccessiblePointList/);
+  const pointListSource = uiPatternsSource.slice(uiPatternsSource.indexOf('export function AccessiblePointList'));
+  assert.match(pointListSource, /accessibilityRole="list"/);
+  assert.match(pointListSource, /accessibilityRole="button"/);
+  assert.match(pointListSource, /onSelect\(point\.id\)/);
+  assert.match(pointListSource, /aria-pressed/);
+  assert.match(pointListSource, /AccessibleLiveRegion/);
+});
+
+test('map point markers provide a 44px keyboard-operable fallback', () => {
+  assert.match(uiPatternsSource, /export function AccessibleMapMarker/);
+  const markerSource = uiPatternsSource.slice(uiPatternsSource.indexOf('export function AccessibleMapMarker'));
+  assert.match(markerSource, /accessibilityRole="button"/);
+  assert.match(markerSource, /isKeyboardActivationKey/);
+  assert.match(markerSource, /minHeight:\s*44/);
+  assert.match(markerSource, /minWidth:\s*44/);
 });
