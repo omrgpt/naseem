@@ -66,3 +66,60 @@ test('onboarding chevrons point in the logical direction for each locale', async
   assert.equal(onboardingChevronRotation(false, 'forward'), '0deg');
   assert.equal(onboardingChevronRotation(true, 'forward'), '180deg');
 });
+
+test('first-run welcome explains route choice without claiming a selected route', async () => {
+  const { ONBOARDING_COPY, onboardingWelcomeContent } = await onboardingModule;
+  assert.equal(typeof onboardingWelcomeContent, 'function');
+
+  const content = onboardingWelcomeContent(ONBOARDING_COPY.en);
+  assert.deepEqual(content, {
+    label: 'HOW IT WORKS',
+    title: 'Choose a route, then choose a time.',
+    routeValue: 'Route',
+    routeLabel: 'Choose one first',
+    timeValue: 'Time',
+    timeLabel: 'Compare wind windows',
+    evidence: 'Route and wind context before you ride.',
+  });
+  assert.doesNotMatch(JSON.stringify(content), /NBH Loop|21\.8|snapshot/iu);
+});
+
+test('Arabic onboarding welcome keeps the same route and time explanation', async () => {
+  const { ONBOARDING_COPY, onboardingWelcomeContent } = await onboardingModule;
+  const content = onboardingWelcomeContent(ONBOARDING_COPY.ar);
+
+  assert.deepEqual(content, {
+    label: 'كيف يعمل نسيم',
+    title: 'اختر مساراً ثم اختر وقتاً.',
+    routeValue: 'المسار',
+    routeLabel: 'اختر واحداً أولاً',
+    timeValue: 'الوقت',
+    timeLabel: 'قارن فترات الرياح',
+    evidence: 'سياق المسار والرياح قبل الركوب.',
+  });
+  assert.match(JSON.stringify(content), /[\u0600-\u06ff]/u);
+  assert.doesNotMatch(Object.values(content).join(' '), /Route|Time|Choose|Compare/iu);
+});
+
+test('English and Arabic onboarding copy expose the same fields', async () => {
+  const { ONBOARDING_COPY } = await onboardingModule;
+  assert.deepEqual(Object.keys(ONBOARDING_COPY.en).sort(), Object.keys(ONBOARDING_COPY.ar).sort());
+  assert.doesNotMatch(ONBOARDING_COPY.en.welcomeNote, /Settings/iu);
+  assert.doesNotMatch(ONBOARDING_COPY.ar.welcomeNote, /الإعدادات/u);
+  assert.match(ONBOARDING_COPY.en.submitError, /on this device/iu);
+  assert.match(ONBOARDING_COPY.ar.submitError, /هذا الجهاز/u);
+});
+
+test('onboarding exposes explicit writing direction for web and native text', async () => {
+  const { onboardingDirectionStyles } = await onboardingModule;
+  assert.deepEqual(onboardingDirectionStyles(false), {
+    direction: 'ltr',
+    writingDirection: 'ltr',
+    textAlign: 'left',
+  });
+  assert.deepEqual(onboardingDirectionStyles(true), {
+    direction: 'rtl',
+    writingDirection: 'rtl',
+    textAlign: 'right',
+  });
+});

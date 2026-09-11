@@ -84,6 +84,9 @@ test("customer copy does not expose internal implementation vocabulary", () => {
       assert.doesNotMatch(value, pattern, `${language} copy still exposes ${key}: ${value}`);
     }
   }
+
+  assert.equal("privatePilot" in catalogs.en, false);
+  assert.equal("privatePilot" in catalogs.ar, false);
 });
 
 test("NBH preview status and route identity stay consistent in both languages", () => {
@@ -149,6 +152,35 @@ test("planner fields do not promise unavailable place search", () => {
   assert.match(catalogs.ar.plannerFieldHint, /لا تبحث/u);
 });
 
+test("empty and unavailable states give truthful next actions in both languages", () => {
+  assert.equal(catalogs.en.noSelectedRouteCopy, "Choose a route to see its plan.");
+  assert.equal(catalogs.ar.noSelectedRouteCopy, "اختر مساراً لرؤية خطته.");
+  assert.equal(
+    catalogs.en.locationUnavailable,
+    "Current location is unavailable. Choose a point on the map or try again.",
+  );
+  assert.equal(
+    catalogs.ar.locationUnavailable,
+    "الموقع الحالي غير متاح. اختر نقطة على الخريطة أو حاول مرة أخرى.",
+  );
+  assert.doesNotMatch(catalogs.en.locationUnavailable, /search/iu);
+  assert.doesNotMatch(catalogs.ar.locationUnavailable, /بحث/u);
+  assert.equal(catalogs.en.forecastFallback, "Forecast unavailable right now.");
+  assert.equal(catalogs.ar.forecastFallback, "التوقع غير متاح الآن.");
+});
+
+test("recorded route copy explains the boundary without implementation language", () => {
+  assert.equal(
+    catalogs.en.recordedTrackCopy,
+    "This is an imported recorded track. It is shown as a preview, not a road-following route.",
+  );
+  assert.equal(
+    catalogs.ar.recordedTrackCopy,
+    "هذا تتبع مستورد. يُعرض كمعاينة، وليس مساراً يتبع الطرق.",
+  );
+  assert.doesNotMatch(catalogs.en.recordedTrackCopy, /silently/iu);
+});
+
 test("language metadata keeps Bahrain locale and reading direction aligned", () => {
   assert.equal(localeForLanguage("en"), "en-BH");
   assert.equal(localeForLanguage("ar"), "ar-BH");
@@ -175,6 +207,12 @@ test("rider-facing labels localize confidence and hide unknown variant IDs", () 
   assert.equal(
     localizedVariantLabel("ar", "nbh-loop-standard-clockwise", variants),
     "اتجاه عقارب الساعة القياسي",
+  );
+  assert.equal(
+    localizedVariantLabel("ar", "variant-without-arabic-label", [
+      { id: "variant-without-arabic-label", label: "Standard clockwise" },
+    ]),
+    "Standard clockwise",
   );
   assert.equal(localizedVariantLabel("en", "internal-variant-id", variants), undefined);
 });

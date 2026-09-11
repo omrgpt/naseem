@@ -8,7 +8,6 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
@@ -16,9 +15,7 @@ import {
 import { Icon, type IconName } from './Icon';
 import { localeForLanguage, type Language } from './i18n';
 import { distanceInUnit, type DistanceUnit } from './distanceDisplay';
-import { departureInstant, formatBahrainTime, formatNumber } from './routeTime';
-import { NBH_PREVIEW_DISTANCE_KM } from './domain';
-import { NBH_CUSTOMER_NAMES } from './seed';
+import { formatNumber } from './routeTime';
 import { DARK, type Palette } from './designTokens';
 import {
   FONT_ARABIC_BOLD,
@@ -52,10 +49,12 @@ export type OnboardingStepKey = 'welcome' | 'profile' | 'goals' | 'permissions';
 
 export type OnboardingCopy = {
   brandName: string;
-  privatePilot: string;
+  onboardingEyebrow: string;
   stepOf: string;
   skip: string;
+  skipHint: string;
   back: string;
+  backHint: string;
   next: string;
   begin: string;
   finish: string;
@@ -64,9 +63,10 @@ export type OnboardingCopy = {
   welcomeNote: string;
   signalLabel: string;
   signalTitle: string;
-  signalTime: string;
-  signalDistance: string;
-  distanceLabel: string;
+  signalRouteValue: string;
+  signalRouteLabel: string;
+  signalTimeValue: string;
+  signalTimeLabel: string;
   signalEvidence: string;
   profileTitle: string;
   profileBody: string;
@@ -99,8 +99,6 @@ export type OnboardingCopy = {
   permissionsBody: string;
   locationPermissionTitle: string;
   locationPermissionBody: string;
-  askLocationLabel: string;
-  askLocationDescription: string;
   privacyTitle: string;
   privacyBody: string;
   privacySource: string;
@@ -133,35 +131,38 @@ export const DEFAULT_ONBOARDING_DATA: OnboardingData = {
 export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
   en: {
     brandName: 'NASEEM',
-    privatePilot: 'YOUR FIRST ROUTE PLAN',
+    onboardingEyebrow: 'FIRST PLAN',
     stepOf: 'Step {step} of {total}',
     skip: 'Skip for now',
+    skipHint: 'Skip setup and enter the app',
     back: 'Back',
+    backHint: 'Return to the previous step',
     next: 'Continue',
-    begin: 'Build my riding plan',
-    finish: 'Open my riding plan',
+    begin: 'Get started',
+    finish: 'Finish setup',
     welcomeTitle: 'Know the ride before you roll.',
-    welcomeBody: 'Naseem brings route shape, wind, and what we know about the road into one clear plan for your next ride.',
-    welcomeNote: 'A few quick choices are enough. You can change them later in Settings.',
-    signalLabel: 'NEXT RIDE SNAPSHOT',
-    signalTitle: 'A calmer way to choose your window.',
-    signalTime: '',
-    signalDistance: '',
-    distanceLabel: 'distance',
-    signalEvidence: 'route and wind context',
-    profileTitle: 'Make the plan yours.',
-    profileBody: 'A few details help us shape the first recommendation without making you create an account.',
+    welcomeBody: 'Choose a route and a time. Naseem brings route shape, wind, and road context into one clear plan.',
+    welcomeNote: 'You can explore without completing setup. Your choices are saved when you finish.',
+    signalLabel: 'HOW IT WORKS',
+    signalTitle: 'Choose a route, then choose a time.',
+    signalRouteValue: 'Route',
+    signalRouteLabel: 'Choose one first',
+    signalTimeValue: 'Time',
+    signalTimeLabel: 'Compare wind windows',
+    signalEvidence: 'Route and wind context before you ride.',
+    profileTitle: 'A few details for your plan.',
+    profileBody: 'These choices shape how your plan is shown and stay on this device.',
     nameLabel: 'Rider name',
     namePlaceholder: 'e.g. Dana',
-    nameHelp: 'Use a name or nickname. You can edit it later.',
+    nameHelp: 'Use a name or nickname. It stays on this device.',
     nameRequired: 'Add a rider name so we know what to call you.',
     nameTooLong: 'Keep the rider name under {max} characters.',
     experienceLabel: 'How do you ride?',
     experienceRequired: 'Choose the closest match for your current riding.',
     experience: { new: 'Finding my rhythm', regular: 'Regular rider', endurance: 'Endurance focused' },
     experienceDescription: { new: 'Short, comfortable rides first.', regular: 'I ride most weeks.', endurance: 'Distance and pacing matter.' },
-    locationLabel: 'Starting area',
-    locationDescription: 'Bahrain route coverage · location stays off until you start a live ride.',
+    locationLabel: 'Planning area',
+    locationDescription: 'Planning starts in Bahrain. Location stays off until you start a live ride.',
     goalsTitle: 'What should the first plan help with?',
     goalsBody: 'Choose one or more. This tunes the way routes and timing are presented—not a fitness score.',
     goalsLabel: 'Your riding goals',
@@ -179,9 +180,7 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
     permissionsTitle: 'Keep control of your location.',
     permissionsBody: 'Naseem does not need your location to plan a route. It asks only when you explicitly start a live ride.',
     locationPermissionTitle: 'Location is a live-ride tool',
-    locationPermissionBody: 'When you tap Start live ride, the app can request foreground location to show progress and the next segment. End the ride and tracking stops.',
-    askLocationLabel: 'Ask when I start a live ride',
-    askLocationDescription: 'Recommended. No permission prompt appears during onboarding.',
+    locationPermissionBody: 'When you tap Start live ride, the app may ask for foreground location to show your position and route progress. End the ride and tracking stops.',
     privacyTitle: 'What stays yours',
     privacyBody: 'Your choices are saved on this device first. Source connections are read-only and can be disconnected or deleted.',
     privacySource: 'Route and weather evidence',
@@ -191,45 +190,48 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
     privacyAcknowledgement: 'I understand when location can be used.',
     privacyRequired: 'Confirm the location boundary before finishing.',
     openPrivacy: 'Review privacy details',
-    submitError: 'We could not save this plan. Check your connection and try again.',
+    submitError: 'We could not save this plan on this device. Try again.',
     readyTitle: 'Your first plan is ready.',
-    readyBody: 'You can change these choices any time. Start with Today to see the next useful riding window.',
+    readyBody: 'Your choices are saved. Open Today when you are ready to review a route and its riding window.',
     skippedTitle: 'You can explore without setup.',
-    skippedBody: 'Set up your riding plan later in Settings whenever you are ready.',
+    skippedBody: 'You can review routes now. Skipping leaves your rider details unchanged.',
     exploreApp: 'Enter Naseem',
     required: 'Required',
   },
   ar: {
     brandName: 'نسيم',
-    privatePilot: 'خطة مسارك الأولى',
+    onboardingEyebrow: 'الخطة الأولى',
     stepOf: 'الخطوة {step} من {total}',
     skip: 'تخطي الآن',
+    skipHint: 'تخطي الإعداد والانتقال إلى التطبيق',
     back: 'رجوع',
+    backHint: 'العودة إلى الخطوة السابقة',
     next: 'متابعة',
-    begin: 'أنشئ خطة ركوبك',
-    finish: 'افتح خطة ركوبك',
+    begin: 'ابدأ الآن',
+    finish: 'أكمل الإعداد',
     welcomeTitle: 'اعرف الرحلة قبل أن تنطلق.',
-    welcomeBody: 'يجمع نسيم شكل المسار والرياح وما نعرفه عن الطريق في خطة واضحة لرحلتك التالية.',
-    welcomeNote: 'تكفي بضع اختيارات سريعة. يمكنك تغييرها لاحقاً من الإعدادات.',
-    signalLabel: 'لمحة عن الرحلة القادمة',
-    signalTitle: 'طريقة أهدأ لاختيار وقت الرحلة.',
-    signalTime: '',
-    signalDistance: '',
-    distanceLabel: 'المسافة',
-    signalEvidence: 'سياق المسار والرياح',
-    profileTitle: 'اجعل الخطة لك.',
-    profileBody: 'تساعدنا بعض التفاصيل على تشكيل التوصية الأولى دون الحاجة إلى إنشاء حساب.',
+    welcomeBody: 'اختر مساراً ووقتاً. يجمع نسيم شكل المسار والرياح وسياق الطريق في خطة واضحة.',
+    welcomeNote: 'يمكنك الاستكشاف دون إكمال الإعداد. تُحفظ اختياراتك عند إنهائه.',
+    signalLabel: 'كيف يعمل نسيم',
+    signalTitle: 'اختر مساراً ثم اختر وقتاً.',
+    signalRouteValue: 'المسار',
+    signalRouteLabel: 'اختر واحداً أولاً',
+    signalTimeValue: 'الوقت',
+    signalTimeLabel: 'قارن فترات الرياح',
+    signalEvidence: 'سياق المسار والرياح قبل الركوب.',
+    profileTitle: 'بعض التفاصيل لخطة ركوبك.',
+    profileBody: 'تحدد هذه الاختيارات طريقة عرض خطتك، وتبقى على هذا الجهاز.',
     nameLabel: 'اسم الراكب',
     namePlaceholder: 'مثال: دانا',
-    nameHelp: 'استخدم اسماً أو لقباً. يمكنك تعديله لاحقاً.',
+    nameHelp: 'استخدم اسماً أو لقباً. يبقى على هذا الجهاز.',
     nameRequired: 'أضف اسم الراكب لنعرف كيف نخاطبك.',
     nameTooLong: 'اجعل الاسم أقل من {max} حرفاً.',
     experienceLabel: 'كيف تركب؟',
     experienceRequired: 'اختر الوصف الأقرب لركوبك الحالي.',
     experience: { new: 'أبحث عن إيقاعي', regular: 'أركب بانتظام', endurance: 'أركز على التحمل' },
     experienceDescription: { new: 'رحلات قصيرة ومريحة أولاً.', regular: 'أركب معظم الأسابيع.', endurance: 'المسافة والإيقاع مهمان.' },
-    locationLabel: 'منطقة البداية',
-    locationDescription: 'نطاق مسارات البحرين · يبقى الموقع متوقفاً حتى تبدأ رحلة مباشرة.',
+    locationLabel: 'منطقة التخطيط',
+    locationDescription: 'يبدأ التخطيط في البحرين. يبقى الموقع متوقفاً حتى تبدأ رحلة مباشرة.',
     goalsTitle: 'بماذا تساعدك الخطة الأولى؟',
     goalsBody: 'اختر واحداً أو أكثر. يضبط ذلك طريقة عرض المسارات والتوقيت، وليس درجة لياقتك.',
     goalsLabel: 'أهداف ركوبك',
@@ -247,9 +249,7 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
     permissionsTitle: 'تحكم في موقعك.',
     permissionsBody: 'لا يحتاج نسيم إلى موقعك لتخطيط المسار. سيطلبه فقط عندما تبدأ رحلة مباشرة بوضوح.',
     locationPermissionTitle: 'الموقع أداة للرحلة المباشرة',
-    locationPermissionBody: 'عند الضغط على بدء رحلة مباشرة، يمكن للتطبيق طلب موقعك أثناء الاستخدام لعرض التقدم والمقطع التالي. عند إنهاء الرحلة يتوقف التتبع.',
-    askLocationLabel: 'اسألني عند بدء رحلة مباشرة',
-    askLocationDescription: 'موصى به. لن يظهر طلب الإذن أثناء الإعداد.',
+    locationPermissionBody: 'عند الضغط على بدء رحلة مباشرة، قد يطلب التطبيق موقعك أثناء الاستخدام لعرض موقعك وتقدم الرحلة. عند إنهاء الرحلة يتوقف التتبع.',
     privacyTitle: 'ما يبقى لك',
     privacyBody: 'تُحفظ اختياراتك على هذا الجهاز أولاً. الاتصالات الخارجية للقراءة فقط ويمكن فصلها أو حذفها.',
     privacySource: 'أدلة المسار والطقس',
@@ -259,11 +259,11 @@ export const ONBOARDING_COPY: Record<Language, OnboardingCopy> = {
     privacyAcknowledgement: 'أفهم متى يمكن استخدام الموقع.',
     privacyRequired: 'أكد حدود الموقع قبل الإنهاء.',
     openPrivacy: 'راجع تفاصيل الخصوصية',
-    submitError: 'تعذر حفظ الخطة. تحقق من الاتصال وحاول مرة أخرى.',
+    submitError: 'تعذر حفظ الخطة على هذا الجهاز. حاول مرة أخرى.',
     readyTitle: 'خطتك الأولى جاهزة.',
-    readyBody: 'يمكنك تغيير هذه الاختيارات في أي وقت. ابدأ من اليوم لرؤية أقرب فترة ركوب مفيدة.',
+    readyBody: 'حُفظت اختياراتك. افتح اليوم عندما تريد مراجعة مسار وفترة ركوب مناسبة.',
     skippedTitle: 'يمكنك الاستكشاف دون إعداد.',
-    skippedBody: 'أنشئ خطة ركوبك لاحقاً من الإعدادات عندما تكون مستعداً.',
+    skippedBody: 'يمكنك مراجعة المسارات الآن. يؤدي التخطي إلى إبقاء تفاصيل راكبك كما هي.',
     exploreApp: 'ادخل إلى نسيم',
     required: 'مطلوب',
   },
@@ -293,6 +293,37 @@ export type OnboardingChevronDirection = 'back' | 'forward';
 export function onboardingChevronRotation(rtl: boolean, direction: OnboardingChevronDirection): '0deg' | '180deg' {
   const pointsRight = direction === 'back' ? rtl : !rtl;
   return pointsRight ? '0deg' : '180deg';
+}
+
+export type OnboardingWelcomeContent = {
+  label: string;
+  title: string;
+  routeValue: string;
+  routeLabel: string;
+  timeValue: string;
+  timeLabel: string;
+  evidence: string;
+};
+
+export function onboardingWelcomeContent(text: OnboardingCopy): OnboardingWelcomeContent {
+  return {
+    label: text.signalLabel,
+    title: text.signalTitle,
+    routeValue: text.signalRouteValue,
+    routeLabel: text.signalRouteLabel,
+    timeValue: text.signalTimeValue,
+    timeLabel: text.signalTimeLabel,
+    evidence: text.signalEvidence,
+  };
+}
+
+export function onboardingDirectionStyles(rtl: boolean) {
+  const direction = rtl ? 'rtl' : 'ltr';
+  return {
+    direction,
+    writingDirection: direction,
+    textAlign: rtl ? 'right' : 'left',
+  } as const;
 }
 
 export type OnboardingProps = {
@@ -383,9 +414,7 @@ export function Onboarding({
   const isDark = palette.bg.toLowerCase() === DARK.bg.toLowerCase();
   const stepKey = STEP_KEYS[step];
   const locale = localeForLanguage(language);
-  const hour12 = new Intl.DateTimeFormat(locale, { hour: 'numeric' }).resolvedOptions().hour12 ?? language === 'en';
-  const signalTime = copy?.signalTime || formatBahrainTime(departureInstant('tomorrow'), locale, { hour12 });
-  const signalDistance = copy?.signalDistance || `${language === 'ar' ? NBH_CUSTOMER_NAMES.arabic : NBH_CUSTOMER_NAMES.short} · ${formatOnboardingDistance(NBH_PREVIEW_DISTANCE_KM, data.distanceUnit, locale, text)}`;
+  const welcomeContent = onboardingWelcomeContent(text);
 
   useEffect(() => {
     setErrors((current) => ({ ...current, [stepKey]: undefined }));
@@ -460,13 +489,13 @@ export function Onboarding({
     <SafeAreaView testID={testID} style={styles.root}>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.topBar}>
+        <View style={[styles.topBar, isRtl && styles.rowReverse]}>
           <View style={[styles.topBarSide, isRtl && styles.rowReverse]}>
             {step > 0 ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={text.back}
-                accessibilityHint={isRtl ? 'العودة إلى الخطوة السابقة' : 'Return to the previous step'}
+                accessibilityHint={text.backHint}
                 disabled={submitting}
                 onPress={handleBack}
                 style={({ pressed }) => [styles.backButton, { opacity: submitting ? 0.45 : pressed ? 0.68 : 1 }, isRtl && styles.rowReverse]}
@@ -485,7 +514,7 @@ export function Onboarding({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={text.skip}
-              accessibilityHint={isRtl ? 'تخطي الإعداد والانتقال إلى التطبيق' : 'Skip setup and enter the app'}
+              accessibilityHint={text.skipHint}
               disabled={submitting}
               onPress={handleSkip}
               style={({ pressed }) => [styles.skipButton, { opacity: submitting ? 0.45 : pressed ? 0.68 : 1 }]}
@@ -499,7 +528,7 @@ export function Onboarding({
         <View style={styles.progressWrap} accessibilityRole="progressbar" accessibilityValue={{ min: 1, max: TOTAL_STEPS, now: step + 1 }}>
           <View style={[styles.progressHeader, isRtl && styles.rowReverse]}>
             <Text style={styles.progressText}>{formatOnboardingProgress(text.stepOf, step + 1, TOTAL_STEPS, locale)}</Text>
-            <Text style={styles.progressText}>{text.privatePilot}</Text>
+            <Text style={styles.progressText}>{text.onboardingEyebrow}</Text>
           </View>
           <View style={[styles.progressTrack, { backgroundColor: palette.line }, isRtl && styles.rowReverse]}>
             <View style={[styles.progressFill, { backgroundColor: palette.accent, width: `${((step + 1) / TOTAL_STEPS) * 100}%` }]} />
@@ -514,7 +543,7 @@ export function Onboarding({
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.contentFrame}>
-            {step === 0 && <WelcomeStep text={text} palette={palette} rtl={isRtl} signalTime={signalTime} signalDistance={signalDistance} />}
+            {step === 0 && <WelcomeStep text={text} palette={palette} rtl={isRtl} content={welcomeContent} />}
             {step === 1 && <ProfileStep text={text} palette={palette} rtl={isRtl} data={data} updateData={updateData} error={error} />}
             {step === 2 && <GoalsStep text={text} palette={palette} rtl={isRtl} data={data} updateData={updateData} error={error} />}
             {step === 3 && <PermissionsStep text={text} palette={palette} rtl={isRtl} data={data} updateData={updateData} onOpenPrivacy={onOpenPrivacy} error={error} />}
@@ -540,31 +569,31 @@ export function Onboarding({
   );
 }
 
-function WelcomeStep({ text, palette, rtl, signalTime, signalDistance }: { text: OnboardingCopy; palette: Palette; rtl: boolean; signalTime: string; signalDistance: string }) {
+function WelcomeStep({ text, palette, rtl, content }: { text: OnboardingCopy; palette: Palette; rtl: boolean; content: OnboardingWelcomeContent }) {
   return (
     <View style={styles.stepBody}>
-      <Text style={[styles.heroTitle, { color: palette.ink }, rtl && styles.textRight]}>{text.welcomeTitle}</Text>
-      <Text style={[styles.heroBody, { color: palette.muted }, rtl && styles.textRight]}>{text.welcomeBody}</Text>
-      <WelcomeSignal text={text} palette={palette} rtl={rtl} signalTime={signalTime} signalDistance={signalDistance} />
+      <Text style={[styles.heroTitle, { color: palette.ink }, rtl && styles.textRight, rtl && styles.arabicBold]}>{text.welcomeTitle}</Text>
+      <Text style={[styles.heroBody, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.welcomeBody}</Text>
+      <WelcomeSignal content={content} palette={palette} rtl={rtl} />
       <View style={[styles.trustRow, { borderColor: palette.line }, rtl && styles.rowReverse]}>
         <Icon name="wind" color={palette.accent} size={18} />
-        <Text style={[styles.trustText, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.signalEvidence}</Text>
+        <Text style={[styles.trustText, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{content.evidence}</Text>
       </View>
     </View>
   );
 }
 
-function WelcomeSignal({ text, palette, rtl, signalTime, signalDistance }: { text: OnboardingCopy; palette: Palette; rtl: boolean; signalTime: string; signalDistance: string }) {
+function WelcomeSignal({ content, palette, rtl }: { content: OnboardingWelcomeContent; palette: Palette; rtl: boolean }) {
   return (
     <View style={[styles.signalPanel, { backgroundColor: palette.ink, borderColor: palette.line }]}>
       <View style={[styles.signalTop, rtl && styles.rowReverse]}>
         <View style={[styles.signalStatus, rtl && styles.rowReverse]}>
           <View style={[styles.statusDot, { backgroundColor: palette.accent }]} />
-          <Text style={[styles.signalLabel, { color: palette.accent }, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{text.signalLabel}</Text>
+          <Text style={[styles.signalLabel, { color: palette.accent }, rtl && styles.arabicBold]}>{content.label}</Text>
         </View>
         <Icon name="route" color={palette.accent} size={22} />
       </View>
-      <Text style={[styles.signalTitle, { color: palette.bg }, rtl && { fontFamily: FONT_ARABIC_BOLD }, rtl && styles.textRight]}>{text.signalTitle}</Text>
+      <Text style={[styles.signalTitle, { color: palette.bg }, rtl && styles.arabicBold, rtl && styles.textRight]}>{content.title}</Text>
       <View style={styles.signalLine}>
         <View style={[styles.signalSegment, { backgroundColor: palette.accent, flex: 1.2 }]} />
         <View style={[styles.signalSegment, { backgroundColor: palette.caution, flex: 0.6 }]} />
@@ -573,13 +602,13 @@ function WelcomeSignal({ text, palette, rtl, signalTime, signalDistance }: { tex
       </View>
       <View style={[styles.signalMetrics, rtl && styles.rowReverse]}>
         <View style={styles.signalMetric}>
-          <Text style={[styles.signalMetricValue, { color: palette.bg }]}>{signalTime}</Text>
-          <Text style={[styles.signalMetricLabel, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.windows.afternoon}</Text>
+          <Text style={[styles.signalMetricValue, { color: palette.bg }, rtl && styles.textRight, rtl && styles.arabicBold]}>{content.routeValue}</Text>
+          <Text style={[styles.signalMetricLabel, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{content.routeLabel}</Text>
         </View>
         <View style={[styles.signalDivider, { backgroundColor: palette.line }]} />
         <View style={styles.signalMetric}>
-          <Text style={[styles.signalMetricValue, { color: palette.bg }]}>{signalDistance}</Text>
-          <Text style={[styles.signalMetricLabel, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.distanceLabel}</Text>
+          <Text style={[styles.signalMetricValue, { color: palette.bg }, rtl && styles.textRight, rtl && styles.arabicBold]}>{content.timeValue}</Text>
+          <Text style={[styles.signalMetricLabel, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{content.timeLabel}</Text>
         </View>
       </View>
     </View>
@@ -603,8 +632,8 @@ function ProfileStep({
 }) {
   return (
     <View style={styles.stepBody}>
-      <Text style={[styles.screenTitle, { color: palette.ink }, rtl && styles.textRight]}>{text.profileTitle}</Text>
-      <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight]}>{text.profileBody}</Text>
+      <Text style={[styles.screenTitle, { color: palette.ink }, rtl && styles.textRight, rtl && styles.arabicBold]}>{text.profileTitle}</Text>
+      <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.profileBody}</Text>
       <FloatingLabelInput
         label={text.nameLabel}
         placeholder={text.namePlaceholder}
@@ -668,10 +697,10 @@ function GoalsStep({
   };
   return (
     <View style={styles.stepBody}>
-      <Text style={[styles.screenTitle, { color: palette.ink }, rtl && styles.textRight]}>{text.goalsTitle}</Text>
-      <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight]}>{text.goalsBody}</Text>
+      <Text style={[styles.screenTitle, { color: palette.ink }, rtl && styles.textRight, rtl && styles.arabicBold]}>{text.goalsTitle}</Text>
+      <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.goalsBody}</Text>
       <SectionLabel label={text.goalsLabel} required={text.required} palette={palette} rtl={rtl} />
-      <View style={styles.goalGrid}>
+      <View style={[styles.goalGrid, rtl && styles.rowReverse]}>
         {(['plan', 'train', 'discover', 'commute'] as RidingGoal[]).map((goal) => (
           <ChoiceTile
             key={goal}
@@ -767,47 +796,32 @@ function PermissionsStep({
 }) {
   return (
     <View style={styles.stepBody}>
-      <Text style={[styles.screenTitle, { color: palette.ink }, rtl && styles.textRight]}>{text.permissionsTitle}</Text>
-      <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight]}>{text.permissionsBody}</Text>
+      <Text style={[styles.screenTitle, { color: palette.ink }, rtl && styles.textRight, rtl && styles.arabicBold]}>{text.permissionsTitle}</Text>
+      <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.permissionsBody}</Text>
       <View style={[styles.permissionPanel, { backgroundColor: palette.ink, borderColor: palette.line }]}>
         <View style={[styles.permissionPanelTop, rtl && styles.rowReverse]}>
           <View style={[styles.permissionIcon, { backgroundColor: palette.accentSoft }]}><Icon name="person" color={palette.accent} size={22} /></View>
           <View style={styles.flex}>
-            <Text style={[styles.permissionTitle, { color: palette.bg }, rtl && { fontFamily: FONT_ARABIC_BOLD }, rtl && styles.textRight]}>{text.locationPermissionTitle}</Text>
+            <Text style={[styles.permissionTitle, { color: palette.bg }, rtl && styles.arabicBold, rtl && styles.textRight]}>{text.locationPermissionTitle}</Text>
             <Text style={[styles.permissionBody, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.locationPermissionBody}</Text>
           </View>
         </View>
-        <View style={[styles.permissionDivider, { backgroundColor: palette.line }]} />
-        <View style={[styles.toggleRow, rtl && styles.rowReverse]}>
-          <View style={styles.flex}>
-            <Text style={[styles.toggleTitle, { color: palette.bg }, rtl && styles.textRight, rtl && styles.arabicMedium]}>{text.askLocationLabel}</Text>
-            <Text style={[styles.toggleDescription, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.askLocationDescription}</Text>
-          </View>
-          <Switch
-            accessibilityLabel={text.askLocationLabel}
-            accessibilityRole="switch"
-            value={data.askLocationWhenStarting}
-            onValueChange={(value) => updateData('askLocationWhenStarting', value)}
-            trackColor={{ false: palette.line, true: palette.accentSoft }}
-            thumbColor={data.askLocationWhenStarting ? palette.accent : palette.muted}
-            ios_backgroundColor={palette.line}
-          />
-        </View>
       </View>
-      <Text style={[styles.privacyHeading, { color: palette.ink }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{text.privacyTitle}</Text>
+      <Text style={[styles.privacyHeading, { color: palette.ink }, rtl && styles.textRight, rtl && styles.arabicBold]}>{text.privacyTitle}</Text>
       <Text style={[styles.screenBody, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{text.privacyBody}</Text>
       <PrivacyLine icon="route" title={text.privacySource} description={text.privacySourceDescription} palette={palette} rtl={rtl} />
       <PrivacyLine icon="person" title={text.privacyRoute} description={text.privacyRouteDescription} palette={palette} rtl={rtl} />
-      <Pressable
-        accessibilityRole="link"
-        accessibilityLabel={text.openPrivacy}
-        onPress={onOpenPrivacy}
-        disabled={!onOpenPrivacy}
-        style={({ pressed }) => [styles.privacyLink, { opacity: !onOpenPrivacy ? 0.55 : pressed ? 0.68 : 1 }, rtl && styles.rowReverse]}
-      >
-        <Text style={[styles.privacyLinkText, { color: palette.accent }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{text.openPrivacy}</Text>
-        <View style={{ transform: [{ rotate: onboardingChevronRotation(rtl, 'forward') }] }}><Icon name="chevron" color={palette.accent} size={14} /></View>
-      </Pressable>
+      {onOpenPrivacy ? (
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={text.openPrivacy}
+          onPress={onOpenPrivacy}
+          style={({ pressed }) => [styles.privacyLink, { opacity: pressed ? 0.68 : 1 }, rtl && styles.rowReverse]}
+        >
+          <Text style={[styles.privacyLinkText, { color: palette.accent }, rtl && styles.textRight, rtl && styles.arabicBold]}>{text.openPrivacy}</Text>
+          <View style={{ transform: [{ rotate: onboardingChevronRotation(rtl, 'forward') }] }}><Icon name="chevron" color={palette.accent} size={14} /></View>
+        </Pressable>
+      ) : null}
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: data.privacyAcknowledged }}
@@ -945,22 +959,22 @@ function PrivacyLine({ icon, title, description, palette, rtl }: { icon: IconNam
     <View style={[styles.privacyLine, rtl && styles.rowReverse]}>
       <View style={[styles.privacyIcon, { backgroundColor: palette.panelAlt }]}><Icon name={icon} color={palette.accent} size={17} /></View>
       <View style={styles.flex}>
-        <Text style={[styles.privacyLineTitle, { color: palette.ink }, rtl && styles.textRight]}>{title}</Text>
-        <Text style={[styles.privacyLineDescription, { color: palette.muted }, rtl && styles.textRight]}>{description}</Text>
+        <Text style={[styles.privacyLineTitle, { color: palette.ink }, rtl && styles.textRight, rtl && styles.arabicMedium]}>{title}</Text>
+        <Text style={[styles.privacyLineDescription, { color: palette.muted }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{description}</Text>
       </View>
     </View>
   );
 }
 
 function FieldError({ message, palette, rtl }: { message: string; palette: Palette; rtl: boolean }) {
-  return <Text accessibilityRole="alert" style={[styles.fieldError, { color: palette.caution }, rtl && styles.textRight]}>{message}</Text>;
+  return <Text accessibilityRole="alert" style={[styles.fieldError, { color: palette.caution }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{message}</Text>;
 }
 
 function InlineError({ message, palette, rtl }: { message: string; palette: Palette; rtl: boolean }) {
   return (
     <View accessibilityRole="alert" style={[styles.inlineError, { backgroundColor: palette.cautionSoft, borderColor: palette.caution }, rtl && styles.rowReverse]}>
       <View style={[styles.inlineErrorDot, { backgroundColor: palette.caution }]} />
-      <Text style={[styles.inlineErrorText, { color: palette.caution }, rtl && styles.textRight]}>{message}</Text>
+      <Text style={[styles.inlineErrorText, { color: palette.caution }, rtl && styles.textRight, rtl && styles.arabicRegular]}>{message}</Text>
     </View>
   );
 }
@@ -1065,10 +1079,6 @@ const baseStyles = StyleSheet.create({
   permissionIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   permissionTitle: { fontFamily: FONT_BOLD, fontSize: 14, lineHeight: 20 },
   permissionBody: { fontFamily: FONT_REGULAR, fontSize: 12, lineHeight: 18, marginTop: 5 },
-  permissionDivider: { height: 1 },
-  toggleRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  toggleTitle: { fontFamily: FONT_SEMIBOLD, fontSize: 12 },
-  toggleDescription: { fontFamily: FONT_REGULAR, fontSize: 10, lineHeight: 15, marginTop: 3 },
   privacyHeading: { fontFamily: FONT_BOLD, fontSize: 15, marginTop: 8 },
   privacyLine: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 11 },
   privacyIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
@@ -1094,9 +1104,10 @@ const baseStyles = StyleSheet.create({
   completeTitle: { color: DARK.ink, fontFamily: FONT_EXTRABOLD, fontSize: 29, lineHeight: 36, textAlign: 'center' },
   completeBody: { fontFamily: FONT_REGULAR, fontSize: 14, lineHeight: 22, textAlign: 'center', maxWidth: 430 },
   rowReverse: { flexDirection: 'row-reverse' },
-  textRight: { textAlign: 'right' },
-  arabicRegular: { fontFamily: FONT_ARABIC_REGULAR },
-  arabicMedium: { fontFamily: FONT_ARABIC_MEDIUM },
+  textRight: { textAlign: 'right', writingDirection: 'rtl' },
+  arabicRegular: { fontFamily: FONT_ARABIC_REGULAR, writingDirection: 'rtl' },
+  arabicMedium: { fontFamily: FONT_ARABIC_MEDIUM, writingDirection: 'rtl' },
+  arabicBold: { fontFamily: FONT_ARABIC_BOLD, writingDirection: 'rtl' },
 });
 
 // Helper components use the stable, token-neutral layout styles. The screen
@@ -1104,14 +1115,15 @@ const baseStyles = StyleSheet.create({
 const styles = baseStyles;
 
 function createStyles(palette: Palette, rtl: boolean) {
+  const direction = onboardingDirectionStyles(rtl);
   return {
     ...baseStyles,
-    root: [baseStyles.root, { backgroundColor: palette.bg }],
-    brandText: [baseStyles.brandText, { color: palette.ink }],
+    root: [baseStyles.root, { backgroundColor: palette.bg, direction: direction.direction }],
+    brandText: [baseStyles.brandText, { color: palette.ink, fontFamily: rtl ? FONT_ARABIC_BOLD : FONT_EXTRABOLD, writingDirection: direction.writingDirection }],
     backIcon: [baseStyles.backIcon, { backgroundColor: palette.panelAlt, transform: [{ rotate: onboardingChevronRotation(rtl, 'back') }] }],
-    backText: [baseStyles.backText, { color: palette.ink, fontFamily: rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM }],
-    skipText: [baseStyles.skipText, { color: palette.muted, textDecorationColor: palette.muted, fontFamily: rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM }],
-    progressText: [baseStyles.progressText, { color: palette.muted, fontFamily: rtl ? FONT_ARABIC_BOLD : FONT_BOLD }],
+    backText: [baseStyles.backText, { color: palette.ink, fontFamily: rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM, writingDirection: direction.writingDirection }],
+    skipText: [baseStyles.skipText, { color: palette.muted, textDecorationColor: palette.muted, fontFamily: rtl ? FONT_ARABIC_MEDIUM : FONT_MEDIUM, writingDirection: direction.writingDirection }],
+    progressText: [baseStyles.progressText, { color: palette.muted, fontFamily: rtl ? FONT_ARABIC_BOLD : FONT_BOLD, writingDirection: direction.writingDirection }],
     progressTrack: [baseStyles.progressTrack, { backgroundColor: palette.line }],
     progressFill: [baseStyles.progressFill, { backgroundColor: palette.accent }],
     heroTitle: [baseStyles.heroTitle, { color: palette.ink, fontFamily: rtl ? FONT_ARABIC_BOLD : FONT_EXTRABOLD }],

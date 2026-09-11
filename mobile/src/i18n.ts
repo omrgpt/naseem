@@ -50,7 +50,7 @@ const en = {
   whyThisWindow: "Why this window",
   selectedRoute: "Selected route",
   noSelectedRoute: "No route selected",
-  noSelectedRouteCopy: "Start with two places and we will find the road route.",
+  noSelectedRouteCopy: "Choose a route to see its plan.",
   mapEmptyCopy:
     "Your route evidence will appear here after you choose Start and Destination.",
   emptyMapLabel: "Empty route map",
@@ -79,7 +79,7 @@ const en = {
   points: "Points",
   geometryUnavailable: "The route line is not available yet.",
   recordedTrackCopy:
-    "This is an imported recorded track. It is not silently treated as a road route.",
+    "This is an imported recorded track. It is shown as a preview, not a road-following route.",
   roadMatchedCopy: "A route line that follows mapped roads is ready to review.",
   straightLineMode: "Route sketch",
   remove: "Remove",
@@ -151,7 +151,7 @@ const en = {
   youProfileStatus: "Rider profile",
   notConnected: "Not connected",
   locationUnavailable:
-    "Current location is unavailable. Choose a point on the map or search again.",
+    "Current location is unavailable. Choose a point on the map or try again.",
   generatorNeedsStart: "Add a Start before generating a loop.",
   generatorTargetError: "Enter a target distance between {min} and {max}.",
   home: "Home",
@@ -171,7 +171,7 @@ const en = {
   fitRoute: "Fit route",
   loop: "loop",
   goodWindowTomorrow: "The next good window opens tomorrow at {time}",
-  forecastFallback: "Forecast unavailable; using a fallback",
+  forecastFallback: "Forecast unavailable right now.",
   confidenceHigh: "High confidence",
   confidenceMedium: "Medium confidence",
   confidenceLow: "Low confidence",
@@ -211,7 +211,7 @@ const en = {
   retry: "Retry",
   acceptRoute: "Accept route",
   brandName: "NASEEM",
-  privatePilot: "YOUR FIRST ROUTE PLAN",
+  firstPlan: "FIRST PLAN",
   location: "Zallaq, Bahrain",
   tomorrow: "tomorrow",
   themeLight: "Light",
@@ -569,7 +569,7 @@ const ar: typeof en = {
   whyThisWindow: "لماذا هذه الفترة؟",
   selectedRoute: "المسار المختار",
   noSelectedRoute: "لم يتم اختيار مسار",
-  noSelectedRouteCopy: "ابدأ بمكانين وسنجد لك مسار الطرق.",
+  noSelectedRouteCopy: "اختر مساراً لرؤية خطته.",
   mapEmptyCopy: "ستظهر أدلة مسارك هنا بعد اختيار البداية والوجهة.",
   emptyMapLabel: "خريطة مسار فارغة",
   rightNow: "الآن",
@@ -596,7 +596,7 @@ const ar: typeof en = {
   noSamples: "المسارات النموذجية متاحة للاستكشاف.",
   points: "النقاط",
   geometryUnavailable: "خط المسار غير متاح بعد.",
-  recordedTrackCopy: "هذا تتبع مستورد، ولا تتم معاملته بصمت كمسار طرق.",
+  recordedTrackCopy: "هذا تتبع مستورد. يُعرض كمعاينة، وليس مساراً يتبع الطرق.",
   roadMatchedCopy: "خط مسار يتبع الطرق المرسومة جاهز للمراجعة.",
   straightLineMode: "رسم تخطيطي للمسار",
   remove: "إزالة",
@@ -665,7 +665,7 @@ const ar: typeof en = {
   youProfileStatus: "ملف الراكب",
   notConnected: "غير متصل",
   locationUnavailable:
-    "الموقع الحالي غير متاح. اختر نقطة على الخريطة أو ابحث مرة أخرى.",
+    "الموقع الحالي غير متاح. اختر نقطة على الخريطة أو حاول مرة أخرى.",
   generatorNeedsStart: "أضف بداية قبل إنشاء حلقة.",
   generatorTargetError: "أدخل مسافة مستهدفة بين {min} و{max}.",
   home: "الرئيسية",
@@ -685,7 +685,7 @@ const ar: typeof en = {
   fitRoute: "ملاءمة المسار",
   loop: "حلقة",
   goodWindowTomorrow: "تبدأ فترة جيدة تالية غداً عند {time}",
-  forecastFallback: "التوقع غير متاح؛ يتم استخدام بديل",
+  forecastFallback: "التوقع غير متاح الآن.",
   confidenceHigh: "ثقة عالية",
   confidenceMedium: "ثقة متوسطة",
   confidenceLow: "ثقة منخفضة",
@@ -724,7 +724,7 @@ const ar: typeof en = {
   retry: "حاول مرة أخرى",
   acceptRoute: "اقبل المسار",
   brandName: "نسيم",
-  privatePilot: "معاينة مسارات البحرين",
+  firstPlan: "الخطة الأولى",
   location: "الزلاق، البحرين",
   tomorrow: "غداً",
   themeLight: "فاتح",
@@ -1065,7 +1065,7 @@ export function localizedVariantLabel(
   if (!variantId) return undefined;
   const variant = variants.find((candidate) => candidate.id === variantId);
   if (!variant) return undefined;
-  return language === "ar" ? variant.labelAr : variant.label;
+  return language === "ar" ? variant.labelAr ?? variant.label : variant.label;
 }
 
 export const copy = { en, ar };
