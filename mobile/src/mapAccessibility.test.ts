@@ -42,9 +42,13 @@ test('route point lists expose keyboard selection and a stable selection announc
 
 test('map point markers provide a 44px keyboard-operable fallback', () => {
   assert.match(uiPatternsSource, /export function AccessibleMapMarker/);
-  const markerSource = uiPatternsSource.slice(uiPatternsSource.indexOf('export function AccessibleMapMarker'));
+  const markerSource = uiPatternsSource.slice(
+    uiPatternsSource.indexOf('export function AccessibleMapMarker'),
+    uiPatternsSource.indexOf('export function AccessiblePointList'),
+  );
   assert.match(markerSource, /accessibilityRole="button"/);
-  assert.match(markerSource, /isKeyboardActivationKey/);
-  assert.match(markerSource, /minHeight:\s*44/);
-  assert.match(markerSource, /minWidth:\s*44/);
+  assert.match(markerSource, /onPress=\{onSelect\}/);
+  assert.doesNotMatch(markerSource, /onKeyDown/);
+  assert.match(uiPatternsSource, /mapMarker:\s*\{[^}]*minHeight:\s*44/);
+  assert.match(uiPatternsSource, /mapMarker:\s*\{[^}]*minWidth:\s*44/);
 });

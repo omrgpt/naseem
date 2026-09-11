@@ -40,10 +40,6 @@ export type AccessiblePointItem = {
 
 const DEFAULT_PALETTE = LIGHT;
 
-export function isKeyboardActivationKey(key: unknown) {
-  return key === 'Enter' || key === ' ' || key === 'Spacebar' || key === 'Space';
-}
-
 export function choiceIndexForKey(
   key: unknown,
   index: number,
@@ -265,10 +261,11 @@ export function AccessibleDialog({
   const dialogContent = (
     <Pressable
       accessible={false}
+      pointerEvents="auto"
       onPress={(event: any) => {
         if (event?.target === event?.currentTarget) handleCancel();
       }}
-      style={styles.dialogBackdrop}
+      style={[styles.dialogBackdrop, Platform.OS === 'web' && styles.dialogBackdropWeb]}
     >
       <View
         ref={dialogRef}
@@ -278,7 +275,7 @@ export function AccessibleDialog({
         accessibilityLabelledBy={dialogTitleId}
         accessibilityViewIsModal
         accessibilityRole="none"
-        onAccessibilityEscape={handleCancel}
+        onAccessibilityEscape={closeOnEscape ? handleCancel : undefined}
         {...({ onKeyDown: handleDialogKeyDown } as any)}
         role="dialog"
         aria-modal={true}
@@ -315,7 +312,7 @@ export function AccessibleDialog({
   return Platform.OS === 'web' ? (
     dialogContent
   ) : (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={handleCancel} onShow={focusInitial}>
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={closeOnEscape ? handleCancel : undefined} onShow={focusInitial}>
       {dialogContent}
     </Modal>
   );
@@ -351,11 +348,7 @@ export function AccessibleChoiceGroup({
   };
 
   const handleOptionKeyDown = (event: any, index: number) => {
-    if (isKeyboardActivationKey(event?.key)) {
-      event.preventDefault?.();
-      selectOption(index);
-      return;
-    }
+    // Pressable owns Enter/Space activation; this handler only moves the radio selection.
     const nextIndex = choiceIndexForKey(event?.key, index, options.length, rtl, disabledIndexes);
     if (nextIndex === null) return;
     event.preventDefault?.();
@@ -433,11 +426,6 @@ export function AccessibleSwitch({
   disabled?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
-  const handleKeyDown = (event: any) => {
-    if (disabled || !isKeyboardActivationKey(event?.key)) return;
-    event.preventDefault?.();
-    onValueChange(!value);
-  };
   return (
     <Pressable
       accessible
@@ -451,7 +439,6 @@ export function AccessibleSwitch({
       {...({ 'aria-keyshortcuts': 'Space Enter' } as any)}
       disabled={disabled}
       onPress={() => onValueChange(!value)}
-      {...({ onKeyDown: handleKeyDown } as any)}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [styles.switch, { backgroundColor: palette.panel, borderColor: palette.line, opacity: disabled ? 0.48 : pressed ? 0.78 : 1 }, focused && styles.focusRing, rtl && styles.rtl]}
@@ -488,12 +475,13 @@ export function AccessibleNavigation({
         return (
           <Pressable
             key={item.id}
-            accessibilityRole="link"
+            accessibilityRole="button"
             accessibilityLabel={item.label}
             accessibilityHint={item.hint}
             accessibilityState={{ selected: current, disabled: item.disabled }}
-            role="link"
+            role="button"
             {...({ 'aria-current': current ? 'page' : undefined } as any)}
+            aria-pressed={current}
             disabled={item.disabled}
             onPress={() => onChange(item.id)}
             onFocus={() => setFocusedId(item.id)}
@@ -624,12 +612,6 @@ export function AccessibleMapMarker({
   palette?: Palette;
 }) {
   const [focused, setFocused] = useState(false);
-
-  const handleKeyDown = (event: any) => {
-    if (!isKeyboardActivationKey(event?.key)) return;
-    event.preventDefault?.();
-    onSelect();
-  };
   return (
     <Pressable
       accessible
@@ -640,7 +622,6 @@ export function AccessibleMapMarker({
       aria-pressed={selected}
       hitSlop={4}
       onPress={onSelect}
-      {...({ onKeyDown: handleKeyDown } as any)}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={({ pressed }) => [styles.mapMarker, { backgroundColor: palette.panel, borderColor: selected ? palette.accent : palette.line, opacity: pressed ? 0.78 : 1 }, focused && styles.focusRing]}
@@ -676,11 +657,6 @@ export function AccessiblePointList({
       <Text style={[styles.pointListLabel, { color: palette.ink }, rtl && styles.textRight]}>{label}</Text>
       {points.map((point, index) => {
         const selected = point.id === selectedId;
-        const handleKeyDown = (event: any) => {
-          if (!isKeyboardActivationKey(event?.key)) return;
-          event.preventDefault?.();
-          if (!point.disabled) onSelect(point.id);
-        };
         return (
           <Pressable
             key={point.id}
@@ -693,7 +669,6 @@ export function AccessiblePointList({
             {...({ 'aria-posinset': index + 1, 'aria-setsize': points.length } as any)}
             disabled={point.disabled}
             onPress={() => onSelect(point.id)}
-            {...({ onKeyDown: handleKeyDown } as any)}
             onFocus={() => setFocusedPointId(point.id)}
             onBlur={() => setFocusedPointId(null)}
             style={({ pressed }) => [styles.pointListItem, { borderColor: palette.line, opacity: point.disabled ? 0.48 : pressed ? 0.78 : 1 }, selected && { backgroundColor: palette.accentSoft, borderColor: palette.accent }, focusedPointId === point.id && styles.focusRing, rtl && styles.rtl]}
@@ -877,14 +852,13 @@ export function ProgressReadout({
       <Text style={[styles.progressLabel, { color: palette.bg }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{label}</Text>
       <Text style={[styles.progressValue, { color: palette.bg }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_BOLD }]}>{value}</Text>
       <Text style={[styles.progressSubtitle, { color: palette.bg }, rtl && styles.textRight, rtl && { fontFamily: FONT_ARABIC_REGULAR }]}>{subtitle}</Text>
+      <AccessibleLiveRegion message={progressAccessibilityLabel} />
       <View
         accessible
         accessibilityRole="progressbar"
         accessibilityLabel={progressAccessibilityLabel}
-        accessibilityLiveRegion="polite"
         accessibilityValue={{ min: 0, max: 1, now: boundedProgress, text: value }}
         role="progressbar"
-        aria-live="polite"
         aria-valuetext={value}
         style={[styles.progressTrack, { backgroundColor: palette.line }]}
       >
@@ -898,6 +872,9 @@ const styles = StyleSheet.create({
   rtl: { flexDirection: 'row-reverse' },
   textRight: { textAlign: 'right' },
   dialogBackdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, backgroundColor: 'rgba(16, 42, 46, 0.72)' },
+  dialogBackdropWeb: Platform.OS === 'web'
+    ? ({ position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, zIndex: 1000, pointerEvents: 'auto' } as any)
+    : {},
   dialogCard: { width: '100%', maxWidth: 520, gap: 14, padding: 20, borderWidth: 1, borderRadius: 22 },
   dialogTitle: { fontFamily: FONT_BOLD, fontSize: 20, lineHeight: 27, fontWeight: '900' },
   dialogDescription: { fontFamily: FONT_REGULAR, fontSize: 14, lineHeight: 21 },
@@ -925,7 +902,7 @@ const styles = StyleSheet.create({
   skipLink: { position: 'absolute', top: -80, left: 16, zIndex: 1000, minHeight: 44, minWidth: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#102A2E', alignItems: 'center', justifyContent: 'center' },
   skipLinkVisible: { top: 8 },
   skipLinkText: { color: '#FFFFFF', fontFamily: FONT_BOLD, fontSize: 13, lineHeight: 20, fontWeight: '700' },
-  liveRegion: { minHeight: 1 },
+  liveRegion: { position: 'absolute', top: 0, left: 0, width: 1, height: 1, overflow: 'hidden', opacity: 0 },
   mapMarker: { minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center', padding: 4, borderWidth: 1, borderRadius: 22 },
   mapMarkerText: { fontFamily: FONT_BOLD, fontSize: 11, lineHeight: 16, fontWeight: '700' },
   pointList: { gap: 8 },
