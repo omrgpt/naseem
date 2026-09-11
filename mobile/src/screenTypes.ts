@@ -11,6 +11,7 @@ import { copy, type Language } from "./i18n";
 import type { Palette } from "./designTokens";
 import type { DistanceDisplay } from "./distanceDisplay";
 import type { RouteLayer } from "./routeConditions";
+import { routePlanHasAuthoritativeGeometry } from "./routeRepository";
 
 export type Copy = typeof copy.en;
 export type BaseScreenCopy = Copy;
@@ -94,24 +95,30 @@ export function routeOwnership(route: CanonicalRouteView): RouteOwnership {
   );
 }
 export function routeGeometryKind(route: CanonicalRouteView): GeometryKind {
+  if (hasUnverifiedReadyRoad(route)) return "waypoint_trace";
   if (route.geometryKind) return route.geometryKind;
   // Legacy catalog and imported plans can contain drawable coordinates without
   // having been checked against mapped roads. Preserve that preview truth when
   // the canonical metadata is not present yet.
   if (route.ownership === "catalog" || routeOrigin(route) === "pilot")
     return "recorded_trace";
-  if (route.geometry?.length) return "road_matched";
+  if (route.geometry?.length) return "waypoint_trace";
   return routeOrigin(route) === "gpx" ? "recorded_trace" : "waypoint_trace";
 }
 export function routeGeometryStatus(route: CanonicalRouteView): GeometryStatus {
+  if (hasUnverifiedReadyRoad(route)) return "unavailable";
   if (route.geometryStatus) return route.geometryStatus;
-  return route.geometry?.length ? "ready" : "draft";
+  return "draft";
 }
 export function routeIsNavigable(route: CanonicalRouteView): boolean {
+  return routePlanHasAuthoritativeGeometry(route);
+}
+
+function hasUnverifiedReadyRoad(route: CanonicalRouteView): boolean {
   return (
-    routeGeometryKind(route) === "road_matched" &&
-    routeGeometryStatus(route) === "ready" &&
-    Boolean(route.geometry?.length)
+    route.geometryKind === "road_matched" &&
+    route.geometryStatus === "ready" &&
+    !routePlanHasAuthoritativeGeometry(route)
   );
 }
 export function routeChipFor(route: CanonicalRouteView, t: Copy): RouteChip {
