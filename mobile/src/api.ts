@@ -1,5 +1,116 @@
 import type { RoutePlan, SegmentCondition } from './domain';
 import { BAHRAIN_LOCALES, formatBahrainTime } from './routeTime';
+import type { Language } from './i18n';
+
+export type ExternalDataFlowDisclosure = {
+  title: string;
+  body: string;
+  providerName: string;
+  providerUrls: readonly string[];
+  coordinates: string;
+  retention: string;
+};
+
+export const ROUTE_MATCHING_DISCLOSURE = {
+  en: {
+    title: 'Before route matching',
+    body: 'When you ask Naseem to match a route, its Start, Destination, and waypoint coordinates are sent to the routing service. This is a network request even when the route is also stored locally; browsing does not request device location.',
+    providerName: 'OpenStreetMap routed-bike service',
+    providerUrls: ['https://routing.openstreetmap.de/routed-bike/route/v1/driving'],
+    coordinates: 'Start, Destination, and waypoint coordinates; route geometry may also be included when route analysis is requested.',
+    retention: 'The matching result is held in a bounded in-memory cache for up to 5 minutes; it is not a saved ride.',
+  },
+  ar: {
+    title: 'قبل مطابقة المسار',
+    body: 'عند طلب مطابقة المسار، تُرسل إحداثيات البداية والوجهة والنقاط الوسيطة إلى خدمة التوجيه. هذا طلب عبر الشبكة حتى عندما يُحفظ المسار محلياً؛ ولا يطلب التصفح موقع الجهاز.',
+    providerName: 'خدمة OpenStreetMap للمسارات بالدراجة',
+    providerUrls: ['https://routing.openstreetmap.de/routed-bike/route/v1/driving'],
+    coordinates: 'إحداثيات البداية والوجهة والنقاط الوسيطة؛ وقد تُضمّن هندسة المسار عند طلب تحليل المسار.',
+    retention: 'تُحفظ نتيجة المطابقة مؤقتاً في ذاكرة محدودة لمدة تصل إلى 5 دقائق؛ ولا تُعد رحلة محفوظة.',
+  },
+} as const satisfies Record<Language, ExternalDataFlowDisclosure>;
+
+export function getRouteMatchingDisclosure(language: Language) {
+  return ROUTE_MATCHING_DISCLOSURE[language];
+}
+
+export type StravaConnectionState = 'unconfigured' | 'configured' | 'connected';
+
+// OAuth is intentionally not implemented in this build. Keep this false even
+// if an unrelated client id is present in the public bundle.
+export const STRAVA_OAUTH_CONFIGURED = false;
+export const STRAVA_CONNECTION_STATE: StravaConnectionState = 'unconfigured';
+
+export type StravaDisclosure = {
+  title: string;
+  statusLabel: string;
+  body: string;
+  actionLabel: string;
+  configured: boolean;
+  state: StravaConnectionState;
+};
+
+export const STRAVA_DISCLOSURE = {
+  en: {
+    title: 'Strava',
+    statusLabel: 'Not configured',
+    body: 'Strava OAuth is not configured in this build. No Strava account, athlete data, or ride history is connected or imported.',
+    actionLabel: 'Not available',
+    configured: false,
+    state: 'unconfigured',
+  },
+  ar: {
+    title: 'Strava',
+    statusLabel: 'غير مهيأ',
+    body: 'مصادقة Strava عبر OAuth غير مهيأة في هذا الإصدار. لا يوجد حساب Strava أو بيانات رياضي أو سجل رحلات متصل أو مستورد.',
+    actionLabel: 'غير متاح',
+    configured: false,
+    state: 'unconfigured',
+  },
+} as const satisfies Record<Language, StravaDisclosure>;
+
+export function getStravaDisclosure(
+  language: Language,
+  state: StravaConnectionState = STRAVA_CONNECTION_STATE,
+): StravaDisclosure {
+  if (state === 'unconfigured') return STRAVA_DISCLOSURE[language];
+  if (state === 'connected') {
+    return language === 'ar'
+      ? {
+          title: 'Strava',
+          statusLabel: 'متصل',
+          body: 'Strava متصل بالصلاحيات التي وافقت عليها. يمكنك فصل الاتصال أو حذف السجل المستورد.',
+          actionLabel: 'إدارة',
+          configured: true,
+          state,
+        }
+      : {
+          title: 'Strava',
+          statusLabel: 'Connected',
+          body: 'Strava is connected with the permissions you approved. You can disconnect or delete imported history.',
+          actionLabel: 'Manage',
+          configured: true,
+          state,
+        };
+  }
+  return language === 'ar'
+    ? {
+        title: 'Strava',
+        statusLabel: 'متاح، غير متصل',
+        body: 'مصادقة Strava مهيأة، لكن هذا الجهاز غير متصل. لن تُستورد بيانات Strava حتى توافق عليها صراحةً.',
+        actionLabel: 'ربط',
+        configured: true,
+        state,
+      }
+    : {
+        title: 'Strava',
+        statusLabel: 'Available, not connected',
+        body: 'Strava OAuth is configured, but this device is not connected. No Strava data is imported until you explicitly authorize it.',
+        actionLabel: 'Connect',
+        configured: true,
+        state,
+      };
+}
 
 const configuredApiUrl = process.env.EXPO_PUBLIC_API_URL?.trim();
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';

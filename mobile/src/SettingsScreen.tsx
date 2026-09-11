@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -24,10 +25,21 @@ import {
   FONT_SEMIBOLD,
 } from "./fonts";
 import type { Language } from "./i18n";
+import {
+  getPrivacyCenterCopy,
+  LOCATION_STATUS_COPY,
+  type LocationPermissionStatus,
+  type PrivacyCenterCopy,
+} from "./appPreferences";
+import {
+  getStravaDisclosure,
+  STRAVA_CONNECTION_STATE,
+  type StravaConnectionState,
+} from "./api";
 
 export type SettingsTheme = "light" | "dark";
 export type SettingsDistanceUnit = DistanceUnit;
-export type PermissionStatus = "granted" | "denied" | "limited" | "undetermined";
+export type PermissionStatus = LocationPermissionStatus;
 
 export type SettingsProfile = {
   name: string;
@@ -45,6 +57,7 @@ export type SettingsScreenProps = {
   notificationsEnabled?: boolean;
   backgroundRefreshEnabled?: boolean;
   locationPermission?: PermissionStatus;
+  stravaStatus?: StravaConnectionState;
   onBack?: () => void;
   onEditProfile?: () => void;
   onThemeChange?: (theme: SettingsTheme) => void;
@@ -52,7 +65,7 @@ export type SettingsScreenProps = {
   onDistanceUnitChange?: (unit: SettingsDistanceUnit) => void;
   onNotificationsChange?: (enabled: boolean) => void;
   onBackgroundRefreshChange?: (enabled: boolean) => void;
-  onRequestLocationPermission?: () => void;
+  onRequestLocationPermission?: () => void | Promise<PermissionStatus | void>;
   onOpenPrivacy?: () => void;
   onExportData?: () => void;
   onSignOut?: () => void;
@@ -91,8 +104,13 @@ type SettingsCopy = {
   locationDenied: string;
   locationLimited: string;
   locationUndetermined: string;
+  locationPending: string;
+  locationUnavailable: string;
   allowLocation: string;
   manage: string;
+  close: string;
+  requesting: string;
+  shareOrDownload: string;
   data: string;
   dataHint: string;
   privacyCenter: string;
@@ -131,7 +149,8 @@ const COPY: Record<Language, SettingsCopy> = {
     kilometres: "Kilometres (km)",
     miles: "Miles (mi)",
     locationNotifications: "Location & notifications",
-    locationNotificationsHint: "Location is used only during an active ride.",
+    locationNotificationsHint:
+      "Location is never requested while you browse. It may be requested after you choose Current location or Start ride.",
     notifications: "Notifications",
     notificationsHint: "Ride windows and meaningful weather changes.",
     enabled: "On",
@@ -142,16 +161,22 @@ const COPY: Record<Language, SettingsCopy> = {
     locationGranted: "Allowed",
     locationDenied: "Not allowed",
     locationLimited: "Limited",
-    locationUndetermined: "Not set",
+    locationUndetermined: "Not requested",
+    locationPending: "Requesting location…",
+    locationUnavailable: "Unavailable",
     allowLocation: "Allow location",
     manage: "Manage",
+    close: "Close",
+    requesting: "Waiting…",
+    shareOrDownload: "Share or download",
     data: "Data",
     dataHint:
       "Saved routes, rides, and preferences stay on this device. Export or delete them whenever you choose.",
-    privacyCenter: "Privacy & data",
-    privacyCenterHint: "See what is saved and how location is used.",
-    exportData: "Export saved data",
-    exportDataHint: "Create a copy of saved routes, rides, and preferences.",
+    privacyCenter: "Privacy center",
+    privacyCenterHint: "See what is stored, sent for a request, retained, shared, or deleted.",
+    exportData: "Share or download saved data",
+    exportDataHint:
+      "Share or download a JSON copy with saved data and precise recorded location samples.",
     deleteData: "Delete saved routes and rides",
     deleteDataHint:
       "Remove saved routes and rides from this device; your settings stay unchanged.",
@@ -184,7 +209,8 @@ const COPY: Record<Language, SettingsCopy> = {
     kilometres: "الكيلومترات (كم)",
     miles: "الأميال (ميل)",
     locationNotifications: "الموقع والإشعارات",
-    locationNotificationsHint: "يُستخدم الموقع فقط أثناء رحلة نشطة.",
+    locationNotificationsHint:
+      "لا يُطلب الموقع أثناء التصفح. قد يُطلب بعد اختيار الموقع الحالي أو بدء الرحلة.",
     notifications: "الإشعارات",
     notificationsHint: "فترات الركوب والتغيرات المهمة في الطقس.",
     enabled: "مفعّلة",
@@ -196,15 +222,21 @@ const COPY: Record<Language, SettingsCopy> = {
     locationDenied: "غير مسموح",
     locationLimited: "محدود",
     locationUndetermined: "لم يُحدد",
+    locationPending: "جارٍ طلب الموقع…",
+    locationUnavailable: "غير متاح",
     allowLocation: "السماح بالموقع",
     manage: "إدارة",
+    close: "إغلاق",
+    requesting: "بانتظار النتيجة…",
+    shareOrDownload: "مشاركة أو تنزيل",
     data: "البيانات",
     dataHint:
       "تبقى المسارات والرحلات والتفضيلات المحفوظة على هذا الجهاز. صدّرها أو احذفها متى شئت.",
-    privacyCenter: "الخصوصية والبيانات",
-    privacyCenterHint: "تعرّف على ما يُحفظ وكيف يُستخدم الموقع.",
-    exportData: "تصدير البيانات المحفوظة",
-    exportDataHint: "أنشئ نسخة من المسارات والرحلات والتفضيلات المحفوظة.",
+    privacyCenter: "مركز الخصوصية",
+    privacyCenterHint: "تعرّف على ما يُحفظ وما يُرسل وما يُحتفظ به وما يمكنك مشاركته أو حذفه.",
+    exportData: "مشاركة أو تنزيل البيانات المحفوظة",
+    exportDataHint:
+      "شارك أو نزّل نسخة JSON تتضمن البيانات المحفوظة وعينات الموقع المسجلة الدقيقة.",
     deleteData: "حذف المسارات والرحلات المحفوظة",
     deleteDataHint:
       "أزل المسارات والرحلات المحفوظة من هذا الجهاز؛ وستبقى إعداداتك كما هي.",
@@ -230,6 +262,7 @@ export function SettingsScreen({
   notificationsEnabled = true,
   backgroundRefreshEnabled = true,
   locationPermission = "undetermined",
+  stravaStatus = STRAVA_CONNECTION_STATE,
   onBack,
   onEditProfile,
   onThemeChange,
@@ -238,7 +271,6 @@ export function SettingsScreen({
   onNotificationsChange,
   onBackgroundRefreshChange,
   onRequestLocationPermission,
-  onOpenPrivacy,
   onExportData,
   onDeleteData,
 }: SettingsScreenProps) {
@@ -250,11 +282,18 @@ export function SettingsScreen({
     backgroundRefreshEnabled,
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [localLocationPermission, setLocalLocationPermission] =
+    useState<PermissionStatus>(() => normalizePermissionStatus(locationPermission));
 
   useEffect(() => setNotifications(notificationsEnabled), [notificationsEnabled]);
   useEffect(
     () => setBackgroundRefresh(backgroundRefreshEnabled),
     [backgroundRefreshEnabled],
+  );
+  useEffect(
+    () => setLocalLocationPermission(normalizePermissionStatus(locationPermission)),
+    [locationPermission],
   );
 
   const updateNotifications = (enabled: boolean) => {
@@ -267,14 +306,22 @@ export function SettingsScreen({
     onBackgroundRefreshChange?.(enabled);
   };
 
-  const locationLabel = permissionLabel(locationPermission, t);
-  const locationTone =
-    locationPermission === "granted"
-      ? "success"
-      : locationPermission === "denied"
-        ? "danger"
-        : "warning";
+  const locationCopy = LOCATION_STATUS_COPY[language][localLocationPermission];
+  const locationLabel = locationCopy.label;
+  const locationTone = locationToneFor(localLocationPermission);
   const initials = profile.initials || getInitials(profile.name);
+  const privacy = getPrivacyCenterCopy(language);
+
+  const requestLocation = async () => {
+    if (!onRequestLocationPermission || localLocationPermission === "pending") return;
+    setLocalLocationPermission("pending");
+    try {
+      const result = await onRequestLocationPermission();
+      if (result && isPermissionStatus(result)) setLocalLocationPermission(result);
+    } catch {
+      setLocalLocationPermission("unavailable");
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -427,24 +474,26 @@ export function SettingsScreen({
           <SettingRow
             icon="map"
             title={t.location}
-            description={t.locationNotificationsHint}
+            description={locationCopy.description}
             styles={styles}
             rtl={rtl}
           >
             <StatusBadge label={locationLabel} tone={locationTone} palette={palette} />
           </SettingRow>
-          {locationPermission !== "granted" ? (
+          {localLocationPermission !== "granted" ? (
             <ActionRow
               icon="map"
               title={t.allowLocation}
-              description={t.locationNotificationsHint}
-              actionLabel={t.manage}
-              onPress={onRequestLocationPermission}
-              disabled={!onRequestLocationPermission}
+              description={locationCopy.description}
+              actionLabel={locationCopy.actionLabel}
+              onPress={() => void requestLocation()}
+              disabled={!onRequestLocationPermission || localLocationPermission === "pending"}
               styles={styles}
               rtl={rtl}
               palette={palette}
-              unavailableLabel={t.unavailable}
+              unavailableLabel={
+                localLocationPermission === "pending" ? t.requesting : t.unavailable
+              }
             />
           ) : null}
           <SettingRow
@@ -485,8 +534,8 @@ export function SettingsScreen({
             title={t.privacyCenter}
             description={t.privacyCenterHint}
             actionLabel={t.manage}
-            onPress={onOpenPrivacy}
-            disabled={!onOpenPrivacy}
+            onPress={() => setPrivacyOpen(true)}
+            disabled={false}
             styles={styles}
             rtl={rtl}
             palette={palette}
@@ -496,7 +545,7 @@ export function SettingsScreen({
             icon="map"
             title={t.exportData}
             description={t.exportDataHint}
-            actionLabel={t.manage}
+            actionLabel={t.shareOrDownload}
             onPress={onExportData}
             disabled={!onExportData}
             styles={styles}
@@ -565,7 +614,145 @@ export function SettingsScreen({
           ) : null}
         </View>
       </ScrollView>
+      <PrivacyCenter
+        visible={privacyOpen}
+        language={language}
+        palette={palette}
+        content={privacy}
+        stravaStatus={stravaStatus}
+        onClose={() => setPrivacyOpen(false)}
+      />
     </SafeAreaView>
+  );
+}
+
+export function PrivacyCenter({
+  visible,
+  language,
+  palette,
+  content,
+  stravaStatus = STRAVA_CONNECTION_STATE,
+  onClose,
+}: {
+  visible: boolean;
+  language: Language;
+  palette: Palette;
+  content: PrivacyCenterCopy;
+  stravaStatus?: StravaConnectionState;
+  onClose: () => void;
+}) {
+  const rtl = language === "ar";
+  const t = COPY[language];
+  const styles = useMemo(() => createStyles(palette, rtl), [palette, rtl]);
+  const strava = getStravaDisclosure(language, stravaStatus);
+  const titleId = `privacy-center-title-${language}`;
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalBackdrop}>
+        <View
+          accessible
+          accessibilityRole="none"
+          accessibilityLabel={content.title}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
+          role="dialog"
+          aria-modal={true}
+          aria-labelledby={titleId}
+          style={styles.privacyModal}
+        >
+          <View style={[styles.privacyHeader, logicalRow(rtl, styles)]}>
+            <Text
+              nativeID={titleId}
+              accessibilityRole="header"
+              role="heading"
+              style={[styles.privacyTitle, rtl && styles.textRight]}
+            >
+              {content.title}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t.close}
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.privacyClose,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={[styles.privacyCloseText, rtl && styles.textRight]}>
+                {t.close}
+              </Text>
+            </Pressable>
+          </View>
+          <ScrollView
+            style={styles.privacyScroll}
+            contentContainerStyle={styles.privacyContent}
+            showsVerticalScrollIndicator
+          >
+            <Text style={[styles.privacyIntro, rtl && styles.textRight]}>
+              {content.intro}
+            </Text>
+            <PrivacySection section={content.storedData} styles={styles} rtl={rtl} />
+            <PrivacySection section={content.temporaryData} styles={styles} rtl={rtl} />
+            <PrivacySection section={content.locationTiming} styles={styles} rtl={rtl} />
+            <PrivacySection
+              section={content.routeMatching}
+              meta={`${content.routeMatching.providerName}\n${content.routeMatching.coordinates}\n${content.routeMatching.retention}\n${content.routeMatching.providerUrls.join("\n")}`}
+              styles={styles}
+              rtl={rtl}
+            />
+            <PrivacySection
+              section={content.weatherRefresh}
+              meta={`${content.weatherRefresh.providerName}\n${content.weatherRefresh.coordinates}\n${content.weatherRefresh.retention}\n${content.weatherRefresh.providerUrls.join("\n")}`}
+              styles={styles}
+              rtl={rtl}
+            />
+            <PrivacySection section={content.retention} styles={styles} rtl={rtl} />
+            <PrivacySection section={content.exportShare} styles={styles} rtl={rtl} />
+            <PrivacySection section={content.deletion} styles={styles} rtl={rtl} />
+            <PrivacySection
+              section={{ title: strava.title, body: strava.body }}
+              meta={`${strava.statusLabel} · ${strava.actionLabel}`}
+              styles={styles}
+              rtl={rtl}
+            />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PrivacySection({
+  section,
+  meta,
+  styles,
+  rtl,
+}: {
+  section: { title: string; body: string };
+  meta?: string;
+  styles: ReturnType<typeof createStyles>;
+  rtl: boolean;
+}) {
+  return (
+    <View style={styles.privacySection}>
+      <Text style={[styles.privacySectionTitle, rtl && styles.textRight]}>
+        {section.title}
+      </Text>
+      <Text style={[styles.privacyBody, rtl && styles.textRight]}>
+        {section.body}
+      </Text>
+      {meta ? (
+        <Text selectable style={[styles.privacyMeta, rtl && styles.textRight]}>
+          {meta}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
@@ -845,11 +1032,32 @@ function ConfirmationPanel({
   );
 }
 
-function permissionLabel(status: PermissionStatus, t: SettingsCopy) {
-  if (status === "granted") return t.locationGranted;
-  if (status === "denied") return t.locationDenied;
-  if (status === "limited") return t.locationLimited;
-  return t.locationUndetermined;
+function normalizePermissionStatus(status: PermissionStatus): PermissionStatus {
+  return status === "granted" ||
+    status === "denied" ||
+    status === "pending" ||
+    status === "unavailable" ||
+    status === "undetermined" ||
+    status === "limited"
+    ? status
+    : "undetermined";
+}
+
+function isPermissionStatus(value: unknown): value is PermissionStatus {
+  return (
+    value === "granted" ||
+    value === "denied" ||
+    value === "pending" ||
+    value === "unavailable" ||
+    value === "undetermined" ||
+    value === "limited"
+  );
+}
+
+function locationToneFor(status: PermissionStatus) {
+  if (status === "granted") return "success" as const;
+  if (status === "denied" || status === "unavailable") return "danger" as const;
+  return "warning" as const;
 }
 
 function getInitials(name: string) {
@@ -886,6 +1094,90 @@ function createStyles(palette: Palette, rtl: boolean) {
       paddingTop: 14,
       paddingBottom: 48,
       gap: 20,
+    },
+    modalBackdrop: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 16,
+      backgroundColor: "rgba(0, 0, 0, 0.72)",
+    },
+    privacyModal: {
+      width: "100%",
+      maxWidth: 720,
+      maxHeight: "88%",
+      overflow: "hidden",
+      borderWidth: 1,
+      borderColor: palette.line,
+      borderRadius: 20,
+      backgroundColor: palette.panel,
+    },
+    privacyHeader: {
+      minHeight: 64,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+      paddingHorizontal: 18,
+      borderBottomWidth: 1,
+      borderBottomColor: palette.line,
+    },
+    privacyTitle: {
+      flex: 1,
+      color: palette.ink,
+      fontFamily: bold,
+      fontSize: 20,
+      lineHeight: 28,
+      fontWeight: "900",
+    },
+    privacyClose: {
+      minHeight: 44,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 10,
+      borderWidth: 1,
+      borderColor: palette.line,
+      borderRadius: 10,
+    },
+    privacyCloseText: {
+      color: palette.ink,
+      fontFamily: semibold,
+      fontSize: 11,
+      lineHeight: 17,
+      fontWeight: "800",
+    },
+    privacyScroll: { flexShrink: 1 },
+    privacyContent: { gap: 14, padding: 18, paddingBottom: 24 },
+    privacyIntro: {
+      color: palette.ink,
+      fontFamily: regular,
+      fontSize: 13,
+      lineHeight: 20,
+    },
+    privacySection: {
+      gap: 5,
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: palette.line,
+    },
+    privacySectionTitle: {
+      color: palette.ink,
+      fontFamily: semibold,
+      fontSize: 13,
+      lineHeight: 19,
+      fontWeight: "800",
+    },
+    privacyBody: {
+      color: palette.muted,
+      fontFamily: regular,
+      fontSize: 12,
+      lineHeight: 19,
+    },
+    privacyMeta: {
+      color: palette.accent,
+      fontFamily: medium,
+      fontSize: 10,
+      lineHeight: 16,
     },
     header: {
       minHeight: 40,
