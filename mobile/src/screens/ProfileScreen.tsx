@@ -38,6 +38,22 @@ type ProfileCopy = {
   openRoute: string;
   km: string;
   recordingOnly: string;
+  sample: string;
+  yours: string;
+  imported: string;
+  routePreview: string;
+  roadRouteReady: string;
+  routeVersion: string;
+  openRide: string;
+  rideSummary: string;
+  routeSnapshot: string;
+  forecastSnapshot: string;
+  noForecastSnapshot: string;
+};
+
+type ProfileScreenPropsWithActivities = ProfileScreenProps & {
+  /** Task 9 supplies the summary destination without changing this screen's presentation contract. */
+  onOpenActivity?: (activity: ActivityDraft) => void;
 };
 
 const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
@@ -70,6 +86,17 @@ const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
     openRoute: "Open route",
     km: "km",
     recordingOnly: "Recording without a planned route",
+    sample: "Sample",
+    yours: "Yours",
+    imported: "Imported",
+    routePreview: "Route preview",
+    roadRouteReady: "Road route ready",
+    routeVersion: "Route version",
+    openRide: "Open ride",
+    rideSummary: "Ride summary",
+    routeSnapshot: "Route snapshot",
+    forecastSnapshot: "Forecast snapshot saved",
+    noForecastSnapshot: "No forecast snapshot",
   },
   ar: {
     title: "ملفك المحلي",
@@ -100,6 +127,17 @@ const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
     openRoute: "فتح المسار",
     km: "كم",
     recordingOnly: "تسجيل بدون مسار مخطط",
+    sample: "عينة",
+    yours: "مسارك",
+    imported: "مستورد",
+    routePreview: "معاينة المسار",
+    roadRouteReady: "مسار طرق جاهز",
+    routeVersion: "إصدار المسار",
+    openRide: "فتح الرحلة",
+    rideSummary: "ملخص الرحلة",
+    routeSnapshot: "لقطة المسار",
+    forecastSnapshot: "لقطة التوقعات محفوظة",
+    noForecastSnapshot: "لا توجد لقطة توقعات",
   },
 };
 
@@ -118,7 +156,8 @@ export function ProfileScreen({
   onConnectionAction,
   onPrivacyAction,
   onSettingsAction,
-}: ProfileScreenProps) {
+  onOpenActivity,
+}: ProfileScreenPropsWithActivities) {
   const styles = createScreenStyles(palette, rtl);
   const text = PROFILE_COPY[rtl ? "ar" : "en"];
   const routes = collectionFor("my-routes", collections);
@@ -163,6 +202,7 @@ export function ProfileScreen({
         styles={styles}
         rtl={rtl}
         text={text}
+        palette={palette}
         formatNumber={formatNumber}
         distanceDisplay={distanceDisplay}
         onOpenCollection={onOpenCollection}
@@ -177,6 +217,7 @@ export function ProfileScreen({
         formatNumber={formatNumber}
         distanceDisplay={distanceDisplay}
         formatTime={formatTime}
+        onOpenActivity={onOpenActivity}
       />
 
       <View style={styles.profileSection}>
@@ -235,6 +276,7 @@ function RoutesSection({
   styles,
   rtl,
   text,
+  palette,
   formatNumber,
   distanceDisplay,
   onOpenCollection,
@@ -245,6 +287,7 @@ function RoutesSection({
   styles: ReturnType<typeof createScreenStyles>;
   rtl: boolean;
   text: ProfileCopy;
+  palette: ProfileScreenProps["palette"];
   formatNumber?: ProfileScreenProps["formatNumber"];
   distanceDisplay: ProfileScreenProps["distanceDisplay"];
   onOpenCollection?: ProfileScreenProps["onOpenCollection"];
@@ -286,6 +329,7 @@ function RoutesSection({
               styles={styles}
               rtl={rtl}
               text={text}
+              palette={palette}
               formatNumber={formatNumber}
               distanceDisplay={distanceDisplay}
               onOpen={onOpenRoute}
@@ -325,6 +369,7 @@ function RoutesSection({
                 styles={styles}
                 rtl={rtl}
                 text={text}
+                palette={palette}
                 formatNumber={formatNumber}
                 distanceDisplay={distanceDisplay}
                 onOpen={onOpenRoute}
@@ -345,6 +390,7 @@ function ActivitySection({
   formatNumber,
   distanceDisplay,
   formatTime,
+  onOpenActivity,
 }: {
   activities: ActivityDraft[];
   styles: ReturnType<typeof createScreenStyles>;
@@ -353,6 +399,7 @@ function ActivitySection({
   formatNumber?: ProfileScreenProps["formatNumber"];
   distanceDisplay: ProfileScreenProps["distanceDisplay"];
   formatTime?: ProfileScreenProps["formatTime"];
+  onOpenActivity?: (activity: ActivityDraft) => void;
 }) {
   const saved = activities
     .filter((activity) => activity.completionState === "saved")
@@ -383,11 +430,19 @@ function ActivitySection({
             const ended = formatTime
               ? formatTime(activity.endedAt)
               : activity.endedAt;
-            return (
-              <View
-                key={activity.id}
-                style={[styles.profileActionRow, logicalRow(rtl, styles)]}
-              >
+            const routeVersion = activity.routeSnapshot?.revision
+              ? `${text.routeVersion} ${formatNumber ? formatNumber(activity.routeSnapshot.revision) : activity.routeSnapshot.revision}`
+              : undefined;
+            const routeSnapshotLabel = activity.routeSnapshot
+              ? [text.routeSnapshot, routeVersion]
+                  .filter(Boolean)
+                  .join(" · ")
+              : text.recordingOnly;
+            const forecastSnapshotLabel = activity.forecastSnapshot
+              ? text.forecastSnapshot
+              : text.noForecastSnapshot;
+            const content = (
+              <>
                 <View style={styles.collectionDot} />
                 <View style={styles.profileActionCopy}>
                   <Text
@@ -405,8 +460,48 @@ function ActivitySection({
                   >
                     {distance} · {ended}
                   </Text>
+                  <Text
+                    style={[
+                      styles.profileActionDescription,
+                      rtl && styles.textRight,
+                    ]}
+                    numberOfLines={2}
+                  >
+                    {routeSnapshotLabel} · {forecastSnapshotLabel}
+                  </Text>
                 </View>
-              </View>
+                {onOpenActivity ? (
+                  <Text style={[styles.profileActionLink, rtl && styles.textRight]}>
+                    {text.open}
+                  </Text>
+                ) : null}
+              </>
+            );
+            if (!onOpenActivity) {
+              return (
+                <View
+                  key={activity.id}
+                  style={[styles.profileActionRow, logicalRow(rtl, styles)]}
+                >
+                  {content}
+                </View>
+              );
+            }
+            return (
+              <Pressable
+                key={activity.id}
+                testID={`saved-ride-${activity.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={`${text.openRide}: ${routeName} · ${text.rideSummary}`}
+                onPress={() => onOpenActivity(activity)}
+                style={({ pressed }) => [
+                  styles.profileActionRow,
+                  logicalRow(rtl, styles),
+                  pressed && styles.disabled,
+                ]}
+              >
+                {content}
+              </Pressable>
             );
           })
         ) : (
@@ -477,6 +572,7 @@ function ProfileRouteRow({
   styles,
   rtl,
   text,
+  palette,
   formatNumber,
   distanceDisplay,
   onOpen,
@@ -485,6 +581,7 @@ function ProfileRouteRow({
   styles: ReturnType<typeof createScreenStyles>;
   rtl: boolean;
   text: ProfileCopy;
+  palette: ProfileScreenProps["palette"];
   formatNumber?: ProfileScreenProps["formatNumber"];
   distanceDisplay: ProfileScreenProps["distanceDisplay"];
   onOpen?: ProfileScreenProps["onOpenRoute"];
@@ -493,10 +590,38 @@ function ProfileRouteRow({
     rtl && item.route.nameAr
       ? item.route.nameAr
       : item.display?.name ?? item.route.name;
-  const distance = distanceDisplay.formatDistance(item.route.distanceKm);
-  const meta = item.display?.movingTime
-    ? `${distance} · ${item.display.movingTime}`
-    : distance;
+  const collectionLabel =
+    item.meta.origin === "gpx"
+      ? text.imported
+      : item.meta.ownership === "catalog"
+        ? text.sample
+        : text.yours;
+  const sourceLabel =
+    item.meta.sourceLabel ?? item.meta.provenanceLabel ?? text.routePreview;
+  const geometryLabel =
+    item.meta.geometryLabel ??
+    (item.meta.geometryKind === "road_matched" &&
+    item.meta.geometryStatus === "ready"
+      ? text.roadRouteReady
+      : item.meta.origin === "gpx"
+        ? text.imported
+        : text.routePreview);
+  const distance =
+    item.display?.distance ?? distanceDisplay.formatDistance(item.route.distanceKm);
+  const routeVersion =
+    item.meta.revision !== undefined
+      ? `${text.routeVersion} ${formatNumber ? formatNumber(item.meta.revision) : item.meta.revision}`
+      : undefined;
+  const meta = [
+    collectionLabel,
+    sourceLabel,
+    geometryLabel,
+    distance,
+    item.display?.movingTime,
+    routeVersion,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Pressable
       accessibilityRole="button"
@@ -532,7 +657,7 @@ function ProfileRouteRow({
           transform: [{ rotate: rtl ? "180deg" : "0deg" }],
         }}
       >
-        <Icon name="chevron" color="#65D0BE" size={14} />
+        <Icon name="chevron" color={palette.accent} size={14} />
       </View>
     </Pressable>
   );
