@@ -39,3 +39,21 @@ Fix-round TDD and verification:
 - Scoped `git diff --check` — passed.
 
 The App, ProfileScreen, Settings, route builder, map renderers, route truth, and localization files were not changed. Native OS permission/GPS, stopped-stream, and browser download behavior remain device/browser verification items beyond the automated checks.
+
+## Review fix round
+
+Addressed the three in-scope P2 findings:
+
+- Web live rides use a small browser geolocation adapter instead of Expo’s SDK 57 web watcher wrapper, which omits the browser error callback. Provider errors now reach the existing denied/unavailable recovery path; the adapter also remains removable. Native rides continue to use Expo’s watcher.
+- The stopped-stream watchdog now requires an active route plan, converts a timed-out off-corridor match to truthful stale state, and never synthesizes route match state for recording-only rides.
+- Completion distance now skips sample-to-sample segments that cross a paused interval, while moving-time and pause-aware gap calculations remain intact.
+
+Review fix TDD and verification:
+
+- RED: browser watcher propagation, off-corridor/recording-only watchdog, and pause-crossing distance assertions failed before implementation.
+- GREEN focused: `npm.cmd exec -- tsx --test .\\src\\rideRecording.test.ts .\\src\\activityRepository.test.ts` — 22 passed, 0 failed.
+- Full suite: `npm.cmd test` — 213 passed, 0 failed.
+- Typecheck: `npm.cmd run typecheck` — passed.
+- Scoped committed diff check: passed.
+
+The adapter behavior is covered by unit tests; an actual browser permission/provider failure and native GPS behavior still require runtime/device verification.

@@ -2,6 +2,7 @@ import type {
   ActivityDraft,
   ActiveRideSnapshot,
   PositionMatch,
+  PositionMatchState,
   RecordedSample,
   RecordingOnlySnapshot,
   RouteAnalysisSnapshot,
@@ -84,6 +85,35 @@ export type BrowserDownloadEnvironment = {
       removeChild: (element: unknown) => void;
     };
   };
+};
+
+export type BrowserLocationPosition = {
+  coords: {
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    heading: number | null;
+  };
+  timestamp: number;
+};
+
+export type BrowserLocationWatchOptions = {
+  enableHighAccuracy?: boolean;
+  maximumAge?: number;
+  timeout?: number;
+};
+
+export type BrowserLocationGeolocation = {
+  watchPosition: (
+    onLocation: (location: BrowserLocationPosition) => void,
+    onError?: (error: unknown) => void,
+    options?: BrowserLocationWatchOptions,
+  ) => number;
+  clearWatch: (watchId: number) => void;
+};
+
+export type BrowserLocationSubscription = {
+  remove: () => void;
 };
 
 /**
@@ -207,6 +237,56 @@ export function isBrowserLocationAvailable(environment?: {
   return typeof navigator !== "undefined" && Boolean(navigator.geolocation);
 }
 
+/**
+ * Expo's web Location adapter does not pass an error callback to the browser
+ * watcher. Use the browser watcher directly on web so provider errors reach
+ * the live-session recovery path.
+ */
+export function watchBrowserLocation(
+  geolocation: unknown,
+  onLocation: (location: BrowserLocationPosition) => void,
+  onError: (error: unknown) => void,
+  options?: BrowserLocationWatchOptions,
+): BrowserLocationSubscription | null {
+  const provider = geolocation as Partial<BrowserLocationGeolocation> | null;
+  if (
+    !provider ||
+    typeof provider.watchPosition !== "function" ||
+    typeof provider.clearWatch !== "function"
+  )
+    return null;
+  let watchId: number | null = null;
+  try {
+    watchId = provider.watchPosition(onLocation, onError, options);
+  } catch (error) {
+    onError(error);
+  }
+  return {
+    remove: () => {
+      if (watchId === null) return;
+      const currentWatchId = watchId;
+      watchId = null;
+      provider.clearWatch?.(currentWatchId);
+    },
+  };
+}
+
+export function shouldMarkLocationStale({
+  activePlan,
+  watchdogState,
+  currentMatchState,
+}: {
+  activePlan: boolean;
+  watchdogState: LocationWatchdogState;
+  currentMatchState?: PositionMatchState;
+}) {
+  return (
+    activePlan &&
+    watchdogState === "stale" &&
+    currentMatchState !== "stale"
+  );
+}
+
 export function recordingOnlyLabels(arabic = false): RecordingOnlyLabels {
   return arabic
     ? { start: "ابدأ التسجيل", active: "التسجيل نشط", end: "إنهاء التسجيل" }
@@ -267,7 +347,7 @@ export function createCompletionDraft(
     endedAt,
     pausedIntervals,
   );
-  const distanceMeters = recordedDistanceMeters(samples);
+  const distanceMeters = recordedDistanceMeters(samples, pausedIntervals);
   return {
     id: `activity-${snapshot.id}-${endedAt}`,
     plannedRouteId: snapshot.routeId,
@@ -322,7 +402,7 @@ export function createRecordingOnlyCompletionDraft(
     observedSamples: samples,
     matchHistory,
     elapsedSeconds: movingDurationSeconds(startedAt, endedAt, pausedIntervals),
-    distanceMeters: recordedDistanceMeters(samples),
+    distanceMeters: recordedDistanceMeters(samples, pausedIntervals),
     matchQuality: qualityFromHistory(matchHistory),
     gaps: Math.max(0, input.gaps ?? countLocationGaps(samples, 45, pausedIntervals)),
     completionState: "draft",
@@ -383,13 +463,25 @@ export function downloadActivityDraft(
   return exportActivityDraft(draft, environment) !== null;
 }
 
-export function recordedDistanceMeters(samples: RecordedSample[]): number {
+export function recordedDistanceMeters(
+  samples: RecordedSample[],
+  pausedIntervals: readonly RidePauseInterval[] = [],
+): number {
   let total = 0;
-  for (let index = 1; index < samples.length; index += 1)
+  for (let index = 1; index < samples.length; index += 1) {
+    const previous = new Date(samples[index - 1].timestamp).getTime();
+    const current = new Date(samples[index].timestamp).getTime();
+    if (
+      Number.isFinite(previous) &&
+      Number.isFinite(current) &&
+      pausedMilliseconds(previous, current, pausedIntervals) > 0
+    )
+      continue;
     total += distanceMeters(
       samples[index - 1].coordinate,
       samples[index].coordinate,
     );
+  }
   return Math.round(total);
 }
 

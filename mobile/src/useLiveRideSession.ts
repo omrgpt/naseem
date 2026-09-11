@@ -32,11 +32,14 @@ import {
   locationUnavailableCopy,
   locationWatchdogState,
   permissionStateFromResult,
+  shouldMarkLocationStale,
   transitionLiveRideState,
+  watchBrowserLocation,
   LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS,
   type LiveRideCompletionState,
   type LiveRidePermissionState,
   type LiveRideStateName,
+  type BrowserLocationPosition,
   type RidePauseInterval,
 } from "./rideRecording";
 
@@ -46,7 +49,9 @@ export {
   locationUnavailableCopy,
   locationWatchdogState,
   permissionStateFromResult,
+  shouldMarkLocationStale,
   transitionLiveRideState,
+  watchBrowserLocation,
 } from "./rideRecording";
 
 export type LiveRideSessionState =
@@ -389,6 +394,7 @@ export function useLiveRideSession({
     const markWatchdogStale = () => {
       if (
         cancelled ||
+        !activePlan ||
         locationWatchdogState({
           nowMs: Date.now(),
           startedAtMs: watcherStartedAtMs,
@@ -400,8 +406,11 @@ export function useLiveRideSession({
         return;
       setPosition((current) => {
         if (
-          current.match?.state === "stale" ||
-          current.match?.state === "off-corridor"
+          !shouldMarkLocationStale({
+            activePlan: Boolean(activePlan),
+            watchdogState: "stale",
+            currentMatchState: current.match?.state,
+          })
         )
           return current;
         const previousMatch = current.match;
@@ -435,13 +444,9 @@ export function useLiveRideSession({
       markWatchdogStale,
       LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS / 6,
     );
-    void Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.Balanced,
-        timeInterval: 15_000,
-        distanceInterval: 25,
-      },
-      (location) => {
+    const handleLocation = (
+      location: Location.LocationObject | BrowserLocationPosition,
+    ) => {
         if (cancelled) return;
         lastFixReceivedAtRef.current = Date.now();
         const coordinate = {
@@ -527,14 +532,36 @@ export function useLiveRideSession({
               ? recordingActiveMessage
               : liveActiveMessage,
         );
-      },
-      reportFailure,
-    )
-      .then((next) => {
-        if (cancelled) next.remove();
-        else subscription = next;
-      })
-      .catch(reportFailure);
+    };
+    const watcherOptions = {
+      accuracy: Location.Accuracy.Balanced,
+      timeInterval: 15_000,
+      distanceInterval: 25,
+    };
+    const browserSubscription =
+      Platform.OS === "web"
+        ? watchBrowserLocation(
+            typeof navigator !== "undefined"
+              ? navigator.geolocation
+              : undefined,
+            handleLocation,
+            reportFailure,
+            { enableHighAccuracy: false, maximumAge: 0, timeout: 15_000 },
+          )
+        : null;
+    if (browserSubscription) subscription = browserSubscription;
+    else if (Platform.OS === "web")
+      reportFailure({
+        code: "POSITION_UNAVAILABLE",
+        message: "Browser location watcher unavailable.",
+      });
+    else
+      void Location.watchPositionAsync(watcherOptions, handleLocation, reportFailure)
+        .then((next) => {
+          if (cancelled) next.remove();
+          else subscription = next;
+        })
+        .catch(reportFailure);
     return () => {
       cancelled = true;
       clearInterval(watchdog);

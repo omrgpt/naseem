@@ -5,6 +5,7 @@ import {
   countLocationGaps,
   createRecordingOnlyCompletionDraft,
   createRecordingOnlySnapshot,
+  recordedDistanceMeters,
 } from "./rideRecording";
 
 test("countLocationGaps ignores normal watcher intervals and counts sparse samples", () => {
@@ -129,6 +130,30 @@ test("the location watchdog becomes stale without a new fix but pauses stay heal
     }),
     "healthy",
   );
+  const shouldMarkStale = (recording as unknown as Record<string, unknown>)
+    .shouldMarkLocationStale as
+    | ((input: {
+        activePlan: boolean;
+        watchdogState: string;
+        currentMatchState?: string;
+      }) => boolean)
+    | undefined;
+  assert.equal(typeof shouldMarkStale, "function");
+  assert.equal(
+    shouldMarkStale?.({
+      activePlan: true,
+      watchdogState: "stale",
+      currentMatchState: "off-corridor",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldMarkStale?.({
+      activePlan: false,
+      watchdogState: "stale",
+    }),
+    false,
+  );
 });
 
 test("paused intervals are removed from moving time and location gaps", () => {
@@ -170,6 +195,54 @@ test("paused intervals are removed from moving time and location gaps", () => {
     ]),
     0,
   );
+  assert.ok(recordedDistanceMeters(samples) > 0);
+  assert.equal(
+    recordedDistanceMeters(samples, [
+      {
+        startedAt: "2026-09-10T14:00:10.000Z",
+        endedAt: "2026-09-10T14:01:50.000Z",
+      },
+    ]),
+    0,
+  );
+});
+
+test("browser watcher forwards provider errors and remains removable", () => {
+  const watchBrowser = (recording as unknown as Record<string, unknown>)
+    .watchBrowserLocation as
+    | ((
+        geolocation: unknown,
+        onLocation: (location: unknown) => void,
+        onError: (error: unknown) => void,
+      ) => { remove: () => void } | null)
+    | undefined;
+  assert.equal(typeof watchBrowser, "function");
+  let errorCallback: ((error: unknown) => void) | undefined;
+  let clearedWatchId: number | undefined;
+  const errors: unknown[] = [];
+  const subscription = watchBrowser?.(
+    {
+      watchPosition: (
+        _onLocation: (location: unknown) => void,
+        onError: (error: unknown) => void,
+      ) => {
+        errorCallback = onError;
+        return 27;
+      },
+      clearWatch: (watchId: number) => {
+        clearedWatchId = watchId;
+      },
+    },
+    () => undefined,
+    (error) => errors.push(error),
+  );
+  const providerError = { code: 2, message: "Position unavailable" };
+  errorCallback?.(providerError);
+  assert.deepEqual(errors, [providerError]);
+  assert.equal(clearedWatchId, undefined);
+  assert.ok(subscription);
+  subscription?.remove();
+  assert.equal(clearedWatchId, 27);
 });
 
 test("unavailable copy is platform-neutral while preserving browser wording", () => {
