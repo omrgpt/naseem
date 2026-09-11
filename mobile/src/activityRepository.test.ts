@@ -20,7 +20,20 @@ import { NBH_LOOP } from "./seed";
 
 test("completion draft keeps route and forecast snapshots separate from later catalog edits", () => {
   const route = routeRecordFromPlan(
-    { ...NBH_LOOP, departureAt: "2026-09-10T14:40:00Z" },
+    {
+      ...NBH_LOOP,
+      departureAt: "2026-09-10T14:40:00Z",
+      geometry: NBH_LOOP.points.map(({ latitude, longitude }) => ({
+        latitude,
+        longitude,
+      })),
+      geometryDistancesKm: NBH_LOOP.points.map((point) => point.distanceKm),
+      legDistancesKm: NBH_LOOP.points.slice(1).map((point, index) =>
+        point.distanceKm - NBH_LOOP.points[index].distanceKm,
+      ),
+      routedDistanceKm: NBH_LOOP.distanceKm,
+      geometrySource: "reviewed route evidence",
+    },
     {
       origin: "drawn",
       ownership: "personal",
