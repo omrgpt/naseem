@@ -2,24 +2,40 @@ import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { MapPreview } from "../MapPreview";
 import { RouteLayerLegend } from "../RouteLayerLegend";
-import { routePlanHasAuthoritativeGeometry } from "../routeRepository";
 import { StatusBadge } from "../UiPatterns";
 import {
   asCanonicalRoute,
+  routeCollection,
+  routeGeometryKind,
+  routeGeometryStatus,
+  routeIsNavigable,
+  routeOrigin,
+  routeOwnership,
   text as tx,
   type RouteDetailScreenProps,
 } from "../screenTypes";
 
 const routeDetailInlineStyles = {
   root: { flex: 1, minHeight: 0 },
-  sheetScroll: { maxHeight: 430, minHeight: 0 },
+  map: { flex: 1, minHeight: 240 },
+  sheet: { flex: 1, minHeight: 0, paddingBottom: 0 },
+  sheetScroll: { flex: 1, minHeight: 0 },
   sheetContent: { gap: 13, flexGrow: 1 },
   stickyActions: {
+    flexShrink: 0,
     borderTopWidth: 1,
     paddingTop: 12,
-    paddingBottom: 8,
   },
   factValue: { flex: 1 },
+  stopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    minWidth: 0,
+  },
+  stopLabel: { flex: 1, flexShrink: 1, minWidth: 0 },
+  stopPair: { gap: 6, minWidth: 0 },
+  stopDetail: { gap: 3, minWidth: 0 },
   stopOrder: {
     width: 28,
     height: 28,
@@ -39,7 +55,6 @@ export function RouteDetailScreen({
   formatNumber,
   distanceDisplay,
   route,
-  routeStatus,
   departureLabel,
   arrivalLabel,
   departureChoices,
@@ -131,46 +146,42 @@ export function RouteDetailScreen({
       </View>
     );
 
-  const explicitGeometryKind = canonical.geometryKind;
-  const explicitGeometryStatus = canonical.geometryStatus;
-  const geometryKind =
-    explicitGeometryKind ??
-    (routeStatus === "trace_ready" ? "recorded_trace" : "waypoint_trace");
-  const geometryStatus =
-    explicitGeometryStatus ??
-    (routeStatus === "matching"
-      ? "matching"
-      : routeStatus === "unavailable"
-        ? "unavailable"
-        : routeStatus === "trace_ready"
-          ? "ready"
-          : "draft");
-  const isRoadRouteReady = routePlanHasAuthoritativeGeometry(canonical);
+  const geometryKind = routeGeometryKind(canonical);
+  const geometryStatus = routeGeometryStatus(canonical);
+  const isRoadRouteReady = routeIsNavigable(canonical);
+  const canonicalOrigin = routeOrigin(canonical);
+  const canonicalOwnership = routeOwnership(canonical);
+  const canonicalCollection = routeCollection(canonical);
+  const invalidReadyRoad =
+    canonical.geometryKind === "road_matched" &&
+    canonical.geometryStatus === "ready" &&
+    !isRoadRouteReady;
   const isUnavailable = geometryStatus === "unavailable";
   const isSample =
-    canonical.ownership === "catalog" || canonical.origin === "pilot";
+    canonicalOwnership === "catalog" || canonicalCollection === "samples";
   const isNbhPreview = canonical.familyId === "nbh-loop" && isSample;
-  const isImported = canonical.origin === "gpx";
+  const isImported =
+    canonicalOrigin === "gpx" || canonicalCollection === "imports";
   const provenanceSource = canonical.provenance?.source;
   const ownershipLabel =
-    canonical.ownership === "catalog"
+    canonicalOwnership === "catalog"
       ? localText("Sample", "عينة")
-      : canonical.ownership === "personal"
+      : canonicalOwnership === "personal"
         ? localText("Yours", "مسارك")
         : localText("Route", "مسار");
   const identityLabel = isSample
     ? localText("Selected sample for review", "العينة المحددة للمراجعة")
     : ownershipLabel;
   const sourceLabel = routeSourceLabel(
-    canonical.origin,
-    canonical.ownership,
+    canonicalOrigin,
+    canonicalOwnership,
     provenanceSource ?? canonical.source,
     t,
     rtl,
   );
   const originLabel = routeOriginLabel(
-    canonical.origin,
-    canonical.ownership,
+    canonicalOrigin,
+    canonicalOwnership,
     t,
     rtl,
   );
@@ -268,8 +279,43 @@ export function RouteDetailScreen({
       : tx(
           t,
           "forecastReviewSummary",
-          "Forecast and route evidence are shown separately when available.",
-        ));
+        "Forecast and route evidence are shown separately when available.",
+      ));
+  const canEditPoints = canonical.points.length >= 2;
+  const pointRecoveryAction = canEditPoints
+    ? {
+        label: tx(t, "editPoints", "Change points"),
+        onPress: onEditPoints,
+      }
+    : {
+        label: tx(t, "chooseAnotherRoute", "Choose another route"),
+        onPress: openRouteChooser,
+      };
+  // A projected unavailable waypoint can be the safe downgrade of a rejected
+  // generated ready-road record. Pilot routes retain their established retry
+  // lifecycle; generated projections stay on point recovery unless the caller
+  // supplied a legacy view without a projected lifecycle state. Readiness
+  // itself still comes only from the canonical helpers above.
+  const retryEligible = Boolean(
+    onRetry &&
+      isUnavailable &&
+      !invalidReadyRoad &&
+      (canonicalOrigin === "pilot" ||
+        (geometryKind === "waypoint_trace" &&
+          canonical.routeStatus === undefined &&
+          canonicalOrigin !== "gpx")),
+  );
+  const primaryRecoveryAction = retryEligible
+    ? { label: tx(t, "retry", "Try again"), onPress: onRetry! }
+    : pointRecoveryAction;
+  const canSave = Boolean(
+    onSave &&
+      canonicalOwnership === "personal" &&
+      geometryKind === "road_matched" &&
+      geometryStatus === "ready" &&
+      isRoadRouteReady &&
+      !isUnavailable,
+  );
   const primaryAction = isRoadRouteReady
     ? isNbhPreview && entryActionsEnabled
       ? {
@@ -280,18 +326,13 @@ export function RouteDetailScreen({
           label: tx(t, "useRoute", "Use this route"),
           onPress: onUse,
         }
-    : onRetry && isUnavailable
-      ? { label: tx(t, "retry", "Try again"), onPress: onRetry }
-      : {
-          label: tx(t, "chooseAnotherRoute", "Choose another route"),
-          onPress: openRouteChooser,
-        };
+    : primaryRecoveryAction;
 
   return (
     <View
       style={[styles.atlas, routeDetailInlineStyles.root, rtl && styles.screenRtl]}
     >
-      <View style={styles.atlasMap}>
+      <View style={[styles.atlasMap, routeDetailInlineStyles.map]}>
         <MapPreview
           route={canonical}
           fullScreen
@@ -332,17 +373,18 @@ export function RouteDetailScreen({
         </View>
       </View>
       <View
-        style={[styles.atlasSheet, expanded && styles.atlasSheetExpanded]}
+        style={[
+          styles.atlasSheet,
+          expanded && styles.atlasSheetExpanded,
+          routeDetailInlineStyles.sheet,
+        ]}
         accessibilityRole="summary"
         accessibilityLabel={`${canonical.name}. ${identityLabel}. ${status}`}
       >
         <ScrollView
           testID="route-detail-decision-sheet"
           style={routeDetailInlineStyles.sheetScroll}
-          contentContainerStyle={[
-            routeDetailInlineStyles.sheetContent,
-            styles.sheetSafeArea,
-          ]}
+          contentContainerStyle={routeDetailInlineStyles.sheetContent}
           showsVerticalScrollIndicator
           keyboardShouldPersistTaps="handled"
           nestedScrollEnabled
@@ -483,7 +525,7 @@ export function RouteDetailScreen({
                 </Text>
               </View>
               <View style={[styles.atlasActions, rtl && styles.rowRtl]}>
-                {onRetry && (
+                {retryEligible && (
                   <Pressable
                     accessibilityRole="button"
                     onPress={onRetry}
@@ -496,11 +538,17 @@ export function RouteDetailScreen({
                 )}
                 <Pressable
                   accessibilityRole="button"
-                  onPress={openEditPoints}
-                  style={styles.secondary}
+                  onPress={pointRecoveryAction.onPress}
+                  style={retryEligible ? styles.secondary : styles.primary}
                 >
-                  <Text style={styles.secondaryText}>
-                    {tx(t, "editPoints", "Change points")}
+                  <Text
+                    style={
+                      retryEligible
+                        ? styles.secondaryText
+                        : styles.primaryText
+                    }
+                  >
+                    {pointRecoveryAction.label}
                   </Text>
                 </Pressable>
               </View>
@@ -632,7 +680,7 @@ export function RouteDetailScreen({
                     {tx(t, "editPoints", "Edit points")}
                   </Text>
                 </Pressable>
-                {onSave && (
+                {canSave && (
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={tx(t, "saveRoute", "Save route")}
@@ -664,7 +712,10 @@ export function RouteDetailScreen({
                     {orderedStops.map((stop) => (
                       <View
                         key={`${stop.index}-${stop.label}`}
-                        style={[styles.row, rtl && styles.rowRtl]}
+                        style={[
+                          routeDetailInlineStyles.stopRow,
+                          rtl && styles.rowRtl,
+                        ]}
                       >
                         <View
                           style={[
@@ -681,7 +732,13 @@ export function RouteDetailScreen({
                             {numberText(stop.index + 1)}
                           </Text>
                         </View>
-                        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+                        <Text
+                          style={[
+                            routeDetailInlineStyles.stopLabel,
+                            styles.fieldHint,
+                            rtl && styles.textRight,
+                          ]}
+                        >
                           {stop.label}
                         </Text>
                       </View>
@@ -730,12 +787,42 @@ export function RouteDetailScreen({
                           "معاينة: ستتبدل نقطة البداية والوجهة. راجع المسار المتغير في التخطيط قبل استخدامه.",
                         )}
                       </Text>
-                      <Text style={[styles.fieldHint, rtl && styles.textRight]}>
-                        {`${reversedPoints[0]?.name ?? tx(t, "startPoint", "Start")} → ${
-                          reversedPoints.at(-1)?.name ??
-                          tx(t, "destination", "Destination")
-                        }`}
-                      </Text>
+                      <View style={routeDetailInlineStyles.stopPair}>
+                        <View style={routeDetailInlineStyles.stopDetail}>
+                          <Text
+                            style={[styles.fieldLabel, rtl && styles.textRight]}
+                          >
+                            {tx(t, "startPoint", "Start")}
+                          </Text>
+                          <Text
+                            style={[
+                              routeDetailInlineStyles.stopLabel,
+                              styles.fieldHint,
+                              rtl && styles.textRight,
+                            ]}
+                          >
+                            {reversedPoints[0]?.name ??
+                              tx(t, "startPoint", "Start")}
+                          </Text>
+                        </View>
+                        <View style={routeDetailInlineStyles.stopDetail}>
+                          <Text
+                            style={[styles.fieldLabel, rtl && styles.textRight]}
+                          >
+                            {tx(t, "destination", "Destination")}
+                          </Text>
+                          <Text
+                            style={[
+                              routeDetailInlineStyles.stopLabel,
+                              styles.fieldHint,
+                              rtl && styles.textRight,
+                            ]}
+                          >
+                            {reversedPoints.at(-1)?.name ??
+                              tx(t, "destination", "Destination")}
+                          </Text>
+                        </View>
+                      </View>
                     </>
                   )}
                   <View style={[styles.manualActions, rtl && styles.rowRtl]}>
@@ -793,12 +880,20 @@ export function RouteDetailScreen({
         </ScrollView>
         <View
           testID="route-detail-sticky-actions"
-          style={[styles.atlasActions, routeDetailInlineStyles.stickyActions]}
+          style={[
+            styles.atlasActions,
+            routeDetailInlineStyles.stickyActions,
+            styles.sheetSafeArea,
+          ]}
         >
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={primaryAction.label}
-            onPress={primaryAction.onPress}
+            onPress={
+              isRoadRouteReady
+                ? primaryAction.onPress
+                : primaryRecoveryAction.onPress
+            }
             style={styles.primary}
           >
             <Text style={styles.primaryText}>{primaryAction.label}</Text>

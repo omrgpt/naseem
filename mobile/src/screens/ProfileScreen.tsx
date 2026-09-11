@@ -1,14 +1,28 @@
 import { Platform, Pressable, Text, View } from "react-native";
 import { Icon } from "../Icon";
+import { routePlanFromRecord } from "../routeRepository";
 import { createScreenStyles } from "../screenStyles";
 import type { ActivityDraft } from "../domain";
 import {
+  asCanonicalRoute,
+  routeCollection,
+  routeGeometryKind,
+  routeGeometryStatus,
+  routeIsNavigable,
+  routeOrigin,
+  routeOwnership,
   type ProfileAction,
+  type CanonicalRouteView,
   type ProfileScreenProps,
   type RouteCollection,
   type RouteCollectionKind,
+  type RouteSurfaceMeta,
   type RouteSurfaceItem,
 } from "../screenTypes";
+
+const profileInlineStyles = {
+  actionCopy: { flexShrink: 1, minWidth: 0 },
+} as const;
 
 type ProfileCopy = {
   title: string;
@@ -46,6 +60,18 @@ type ProfileCopy = {
   routeVersion: string;
   openRide: string;
   rideSummary: string;
+  ownership: string;
+  collection: string;
+  routeSource: string;
+  readiness: string;
+  distance: string;
+  duration: string;
+  minutes: string;
+  route: string;
+  gpxImport: string;
+  drawnRoute: string;
+  generatedRoute: string;
+  routeUnavailable: string;
   routeSnapshot: string;
   forecastSnapshot: string;
   noForecastSnapshot: string;
@@ -94,6 +120,18 @@ const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
     routeVersion: "Route version",
     openRide: "Open ride",
     rideSummary: "Ride summary",
+    ownership: "Ownership",
+    collection: "Collection",
+    routeSource: "Route source",
+    readiness: "Readiness",
+    distance: "Distance",
+    duration: "Moving time",
+    minutes: "min",
+    route: "Route",
+    gpxImport: "GPX import",
+    drawnRoute: "Drawn on device",
+    generatedRoute: "Generated route",
+    routeUnavailable: "Route unavailable",
     routeSnapshot: "Route snapshot",
     forecastSnapshot: "Forecast snapshot saved",
     noForecastSnapshot: "No forecast snapshot",
@@ -135,6 +173,18 @@ const PROFILE_COPY: Record<"en" | "ar", ProfileCopy> = {
     routeVersion: "إصدار المسار",
     openRide: "فتح الرحلة",
     rideSummary: "ملخص الرحلة",
+    ownership: "الملكية",
+    collection: "المجموعة",
+    routeSource: "مصدر المسار",
+    readiness: "الجاهزية",
+    distance: "المسافة",
+    duration: "وقت الحركة",
+    minutes: "د",
+    route: "مسار",
+    gpxImport: "استيراد GPX",
+    drawnRoute: "مرسوم على الجهاز",
+    generatedRoute: "مسار مُنشأ",
+    routeUnavailable: "المسار غير متاح",
     routeSnapshot: "لقطة المسار",
     forecastSnapshot: "لقطة التوقعات محفوظة",
     noForecastSnapshot: "لا توجد لقطة توقعات",
@@ -424,14 +474,30 @@ function ActivitySection({
                 ? activity.routeSnapshot.nameAr
                 : activity.routeSnapshot.name
               : text.recordingOnly;
+            const routeView = activity.routeSnapshot
+              ? asCanonicalRoute(routePlanFromRecord(activity.routeSnapshot))
+              : null;
+            const routeFacts = routeView
+              ? profileRouteFacts(routeView, text)
+              : {
+                  collectionLabel: text.recordingOnly,
+                  ownershipLabel: text.recordingOnly,
+                  sourceLabel: text.recordingOnly,
+                  readinessLabel: text.recordingOnly,
+                };
             const distance = distanceDisplay.formatDistance(
               activity.distanceMeters / 1000,
+            );
+            const movingTime = formatMinutes(
+              activity.elapsedSeconds / 60,
+              text,
+              formatNumber,
             );
             const ended = formatTime
               ? formatTime(activity.endedAt)
               : activity.endedAt;
-            const routeVersion = activity.routeSnapshot?.revision
-              ? `${text.routeVersion} ${formatNumber ? formatNumber(activity.routeSnapshot.revision) : activity.routeSnapshot.revision}`
+            const routeVersion = routeView?.revision
+              ? `${text.routeVersion} ${formatNumber ? formatNumber(routeView.revision) : routeView.revision}`
               : undefined;
             const routeSnapshotLabel = activity.routeSnapshot
               ? [text.routeSnapshot, routeVersion]
@@ -441,10 +507,31 @@ function ActivitySection({
             const forecastSnapshotLabel = activity.forecastSnapshot
               ? text.forecastSnapshot
               : text.noForecastSnapshot;
+            const visibleRouteFacts = [
+              routeFacts.collectionLabel,
+              routeFacts.ownershipLabel !== routeFacts.collectionLabel
+                ? routeFacts.ownershipLabel
+                : undefined,
+              routeFacts.sourceLabel,
+              routeFacts.readinessLabel,
+            ]
+              .filter(Boolean)
+              .join(" · ");
+            const accessibilityLabel = [
+              `${text.openRide}: ${routeName}`,
+              `${text.collection}: ${routeFacts.collectionLabel}`,
+              `${text.ownership}: ${routeFacts.ownershipLabel}`,
+              `${text.routeSource}: ${routeFacts.sourceLabel}`,
+              `${text.readiness}: ${routeFacts.readinessLabel}`,
+              `${text.distance}: ${distance}`,
+              `${text.duration}: ${movingTime}`,
+            ].join(" · ");
             const content = (
               <>
                 <View style={styles.collectionDot} />
-                <View style={styles.profileActionCopy}>
+                <View
+                  style={[styles.profileActionCopy, profileInlineStyles.actionCopy]}
+                >
                   <Text
                     style={[styles.profileActionTitle, rtl && styles.textRight]}
                     numberOfLines={2}
@@ -456,16 +543,25 @@ function ActivitySection({
                       styles.profileActionDescription,
                       rtl && styles.textRight,
                     ]}
-                    numberOfLines={2}
+                    numberOfLines={3}
                   >
-                    {distance} · {ended}
+                    {visibleRouteFacts}
                   </Text>
                   <Text
                     style={[
                       styles.profileActionDescription,
                       rtl && styles.textRight,
                     ]}
-                    numberOfLines={2}
+                    numberOfLines={3}
+                  >
+                    {distance} · {movingTime} · {ended}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.profileActionDescription,
+                      rtl && styles.textRight,
+                    ]}
+                    numberOfLines={3}
                   >
                     {routeSnapshotLabel} · {forecastSnapshotLabel}
                   </Text>
@@ -492,7 +588,7 @@ function ActivitySection({
                 key={activity.id}
                 testID={`saved-ride-${activity.id}`}
                 accessibilityRole="button"
-                accessibilityLabel={`${text.openRide}: ${routeName} · ${text.rideSummary}`}
+                accessibilityLabel={accessibilityLabel}
                 onPress={() => onOpenActivity(activity)}
                 style={({ pressed }) => [
                   styles.profileActionRow,
@@ -567,6 +663,85 @@ function ConnectionRow({
   );
 }
 
+function profileRouteView(
+  item: RouteSurfaceItem,
+  metadata: RouteSurfaceMeta,
+): CanonicalRouteView {
+  const route = asCanonicalRoute(item.route)!;
+  return {
+    ...route,
+    ...(route.origin === undefined && metadata.origin !== undefined
+      ? { origin: metadata.origin }
+      : {}),
+    ...(route.ownership === undefined && metadata.ownership !== undefined
+      ? { ownership: metadata.ownership }
+      : {}),
+    ...(route.geometryKind === undefined && metadata.geometryKind !== undefined
+      ? { geometryKind: metadata.geometryKind }
+      : {}),
+    ...(route.geometryStatus === undefined &&
+    metadata.geometryStatus !== undefined
+      ? { geometryStatus: metadata.geometryStatus }
+      : {}),
+  } as CanonicalRouteView;
+}
+
+function profileRouteFacts(
+  route: CanonicalRouteView,
+  text: ProfileCopy,
+  sourceOverride?: string,
+) {
+  const origin = routeOrigin(route);
+  const ownership = routeOwnership(route);
+  const collection = routeCollection(route);
+  const geometryKind = routeGeometryKind(route);
+  const geometryStatus = routeGeometryStatus(route);
+  const ownershipLabel =
+    collection === "samples" || ownership === "catalog"
+      ? text.sample
+      : ownership === "personal"
+        ? text.yours
+        : text.route;
+  const collectionLabel =
+    collection === "imports" || origin === "gpx" ? text.imported : ownershipLabel;
+  const sourceLabel =
+    sourceOverride?.trim() ||
+    profileRouteSourceLabel(route, origin, ownership, text);
+  const readinessLabel =
+    geometryStatus === "unavailable"
+      ? text.routeUnavailable
+      : routeIsNavigable(route) &&
+          geometryKind === "road_matched" &&
+          geometryStatus === "ready"
+        ? text.roadRouteReady
+        : text.routePreview;
+  return { collectionLabel, ownershipLabel, sourceLabel, readinessLabel };
+}
+
+function profileRouteSourceLabel(
+  route: CanonicalRouteView,
+  origin: ReturnType<typeof routeOrigin>,
+  ownership: ReturnType<typeof routeOwnership>,
+  text: ProfileCopy,
+) {
+  if (origin === "gpx" || route.source === "GPX import") return text.gpxImport;
+  if (origin === "drawn") return text.drawnRoute;
+  if (origin === "generated") return text.generatedRoute;
+  if (route.source.trim()) return route.source;
+  if (ownership === "catalog") return text.sample;
+  return text.routePreview;
+}
+
+function formatMinutes(
+  minutes: number,
+  text: ProfileCopy,
+  formatNumber?: ProfileScreenProps["formatNumber"],
+) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return undefined;
+  const rounded = Math.round(minutes);
+  return `${formatNumber ? formatNumber(rounded) : rounded} ${text.minutes}`;
+}
+
 function ProfileRouteRow({
   item,
   styles,
@@ -586,46 +761,54 @@ function ProfileRouteRow({
   distanceDisplay: ProfileScreenProps["distanceDisplay"];
   onOpen?: ProfileScreenProps["onOpenRoute"];
 }) {
+  const metadata = item.meta ?? ({} as RouteSurfaceMeta);
+  const routeView = profileRouteView(item, metadata);
   const name =
     rtl && item.route.nameAr
       ? item.route.nameAr
       : item.display?.name ?? item.route.name;
-  const collectionLabel =
-    item.meta.origin === "gpx"
-      ? text.imported
-      : item.meta.ownership === "catalog"
-        ? text.sample
-        : text.yours;
-  const sourceLabel =
-    item.meta.sourceLabel ?? item.meta.provenanceLabel ?? text.routePreview;
-  const geometryLabel =
-    item.meta.geometryLabel ??
-    (item.meta.geometryKind === "road_matched" &&
-    item.meta.geometryStatus === "ready"
-      ? text.roadRouteReady
-      : item.meta.origin === "gpx"
-        ? text.imported
-        : text.routePreview);
+  const facts = profileRouteFacts(
+    routeView,
+    text,
+    metadata.sourceLabel ?? metadata.provenanceLabel,
+  );
   const distance =
     item.display?.distance ?? distanceDisplay.formatDistance(item.route.distanceKm);
   const routeVersion =
-    item.meta.revision !== undefined
-      ? `${text.routeVersion} ${formatNumber ? formatNumber(item.meta.revision) : item.meta.revision}`
+    metadata.revision !== undefined
+      ? `${text.routeVersion} ${formatNumber ? formatNumber(metadata.revision) : metadata.revision}`
       : undefined;
+  const movingTime =
+    item.display?.movingTime ??
+    formatMinutes(routeView.durationMinutes, text, formatNumber);
   const meta = [
-    collectionLabel,
-    sourceLabel,
-    geometryLabel,
+    facts.collectionLabel,
+    facts.ownershipLabel !== facts.collectionLabel
+      ? facts.ownershipLabel
+      : undefined,
+    facts.sourceLabel,
+    facts.readinessLabel,
     distance,
-    item.display?.movingTime,
+    movingTime,
     routeVersion,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const accessibilityLabel = [
+    `${text.openRoute}: ${name}`,
+    `${text.collection}: ${facts.collectionLabel}`,
+    `${text.ownership}: ${facts.ownershipLabel}`,
+    `${text.routeSource}: ${facts.sourceLabel}`,
+    `${text.readiness}: ${facts.readinessLabel}`,
+    `${text.distance}: ${distance}`,
+    movingTime ? `${text.duration}: ${movingTime}` : undefined,
   ]
     .filter(Boolean)
     .join(" · ");
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${text.openRoute}: ${name}`}
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: !onOpen }}
       onPress={onOpen ? () => onOpen(item) : undefined}
       disabled={!onOpen}
@@ -636,7 +819,9 @@ function ProfileRouteRow({
       ]}
     >
       <View style={styles.collectionDot} />
-      <View style={styles.profileActionCopy}>
+      <View
+        style={[styles.profileActionCopy, profileInlineStyles.actionCopy]}
+      >
         <Text
           style={[styles.profileActionTitle, rtl && styles.textRight]}
           numberOfLines={2}
@@ -645,7 +830,7 @@ function ProfileRouteRow({
         </Text>
         <Text
           style={[styles.profileActionDescription, rtl && styles.textRight]}
-          numberOfLines={2}
+          numberOfLines={3}
         >
           {meta}
         </Text>
@@ -681,7 +866,9 @@ function ProfileActionRow({
       <View style={styles.profileActionIcon}>
         <Icon name={action.icon} color={palette.accent} size={17} />
       </View>
-      <View style={styles.profileActionCopy}>
+      <View
+        style={[styles.profileActionCopy, profileInlineStyles.actionCopy]}
+      >
         <Text style={[styles.profileActionTitle, rtl && styles.textRight]}>
           {action.title}
         </Text>
