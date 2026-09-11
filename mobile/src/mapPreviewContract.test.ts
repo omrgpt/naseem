@@ -115,6 +115,19 @@ test("native provider falls back without a configured Google key", () => {
   assert.equal(selectMapProvider({ platform: "web" }), "openstreetmap");
 });
 
+test("native provider fallback does not expose inert map controls", () => {
+  const shouldShowNativeMapControls = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      shouldShowNativeMapControls?: (nativeMapUnavailable: boolean) => boolean;
+    }
+  ).shouldShowNativeMapControls;
+  assert.equal(typeof shouldShowNativeMapControls, "function");
+  if (typeof shouldShowNativeMapControls !== "function") return;
+
+  assert.equal(shouldShowNativeMapControls(true), false);
+  assert.equal(shouldShowNativeMapControls(false), true);
+});
+
 test("marker hit targets meet the minimum touch size", () => {
   const markerHitSize = (
     mapPreviewContract as typeof mapPreviewContract & {
@@ -124,6 +137,43 @@ test("marker hit targets meet the minimum touch size", () => {
   assert.equal(typeof markerHitSize, "number");
   if (typeof markerHitSize !== "number") return;
   assert.ok(markerHitSize >= 44);
+});
+
+test("marker hit target layout keeps the outer web target at the shared size", () => {
+  const markerHitTarget = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      MAP_MARKER_HIT_TARGET?: { width: number; height: number };
+    }
+  ).MAP_MARKER_HIT_TARGET;
+  assert.equal(typeof markerHitTarget, "object");
+  if (!markerHitTarget) return;
+
+  assert.deepEqual(markerHitTarget, { width: 44, height: 44 });
+});
+
+test("center placement rejects non-finite unproject results before dispatch", () => {
+  const validMapPressCoordinate = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      validMapPressCoordinate?: (coordinate: unknown) =>
+        | { latitude: number; longitude: number }
+        | undefined;
+    }
+  ).validMapPressCoordinate;
+  assert.equal(typeof validMapPressCoordinate, "function");
+  if (typeof validMapPressCoordinate !== "function") return;
+
+  assert.deepEqual(
+    validMapPressCoordinate({ latitude: 26.2, longitude: 50.5 }),
+    { latitude: 26.2, longitude: 50.5 },
+  );
+  assert.equal(
+    validMapPressCoordinate({ latitude: Number.NaN, longitude: 50.5 }),
+    undefined,
+  );
+  assert.equal(
+    validMapPressCoordinate({ latitude: 26.2, longitude: Number.POSITIVE_INFINITY }),
+    undefined,
+  );
 });
 
 test("map layer boundary keeps forecast and selection state screen-owned", () => {

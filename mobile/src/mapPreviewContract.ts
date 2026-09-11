@@ -6,6 +6,10 @@ export type MapProvider =
   | "native-fallback";
 
 export const MAP_MARKER_HIT_SIZE = 44;
+export const MAP_MARKER_HIT_TARGET = {
+  width: MAP_MARKER_HIT_SIZE,
+  height: MAP_MARKER_HIT_SIZE,
+} as const;
 
 /**
  * MapPreview renders route/access evidence and supplied live-position data.
@@ -121,6 +125,13 @@ export function selectMapProvider(input: {
   return input.platform === "web" ? "openstreetmap" : "react-native-maps";
 }
 
+/** A no-key native fallback has no map surface, so map-only controls are inert. */
+export function shouldShowNativeMapControls(
+  nativeMapUnavailable: boolean,
+): boolean {
+  return !nativeMapUnavailable;
+}
+
 /**
  * Compact previews are intentionally quiet. The minimal fit/zoom toolbar is
  * reserved for full route-review surfaces so web and native expose the same
@@ -148,6 +159,13 @@ export function hasFiniteCoordinate(
       value.longitude >= -180 &&
       value.longitude <= 180,
   );
+}
+
+/** Keep every map press callback behind the same finite-coordinate guard. */
+export function validMapPressCoordinate(
+  coordinate: unknown,
+): Coordinate | undefined {
+  return hasFiniteCoordinate(coordinate) ? coordinate : undefined;
 }
 
 export function shouldShowUserLocationControl(

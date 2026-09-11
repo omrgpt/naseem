@@ -65,6 +65,18 @@ test('metadata-less geometry stays a dashed preview instead of becoming road tru
   assert.equal(model.status, 'pilot');
 });
 
+test('metadata-less geometry never promotes the legacy status to matched', () => {
+  const route = {
+    ...baseRoute,
+    geometry: [
+      { latitude: 26.1, longitude: 50.5 },
+      { latitude: 26.105, longitude: 50.51 },
+    ],
+  };
+
+  assert.equal(mapGeometryStatus(route, 'pilot'), 'pilot');
+});
+
 test('unavailable geometry renders named points without any route line', () => {
   const route = {
     ...baseRoute,

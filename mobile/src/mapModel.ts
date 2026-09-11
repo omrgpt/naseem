@@ -56,11 +56,13 @@ export function mapLineModel(route: RoutePlan, requestedStatus?: MapGeometryStat
 /**
  * Legacy non-rendering status adapter for callers that predate canonical
  * geometry metadata. MapPreview must use mapLineModel instead; this helper is
- * never consulted for line style or viewport geometry.
+ * never consulted for line style or viewport geometry, and it reports matched
+ * only when explicit ready road-matched metadata validates the geometry.
  * @deprecated Use mapLineModel.status for renderer state.
  */
 export function mapGeometryStatus(route: RoutePlan, requestedStatus?: MapGeometryStatus): MapGeometryStatus {
-  return legacyMapGeometryStatus(route, requestedStatus);
+  const status = renderMapGeometryStatus(route, requestedStatus);
+  return status === 'matched' || status === 'loading' ? status : 'pilot';
 }
 
 function renderMapGeometryStatus(
@@ -75,24 +77,6 @@ function renderMapGeometryStatus(
   if (metadata.geometryStatus === 'draft') return 'draft';
   if (requestedStatus === 'loading' && metadata.geometryStatus === undefined) return 'loading';
   return linePoints.length < 2 ? 'empty' : 'pilot';
-}
-
-function legacyMapGeometryStatus(
-  route: RoutePlan,
-  requestedStatus?: MapGeometryStatus,
-): MapGeometryStatus {
-  const strictStatus = renderMapGeometryStatus(route, requestedStatus);
-  if (strictStatus === 'matched' || strictStatus === 'loading') return strictStatus;
-  const metadata = route as RouteWithGeometryMetadata;
-  if (
-    requestedStatus === 'pilot' &&
-    metadata.geometryKind === undefined &&
-    metadata.geometryStatus === undefined &&
-    isRenderableGeometry((route as { geometry?: unknown }).geometry)
-  ) {
-    return 'matched';
-  }
-  return requestedStatus === 'loading' ? 'loading' : 'pilot';
 }
 
 export function mapIsLoop(route: RoutePlan) {

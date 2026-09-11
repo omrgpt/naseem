@@ -19,6 +19,7 @@ export type MapText = {
   statusDraft?: string;
   statusEmpty?: string;
   providerUnavailable?: string;
+  providerFallbackHint?: string;
   tilesUnavailable?: string;
   zoomIn?: string;
   zoomOut?: string;

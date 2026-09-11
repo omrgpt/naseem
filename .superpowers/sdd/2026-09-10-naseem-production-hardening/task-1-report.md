@@ -19,6 +19,10 @@ Implemented the map surface, geometry rendering, and provider fallback hardening
 - Coordinate validation is centralized, rejects null/non-numeric/out-of-range/pole coordinates, filters malformed route points, guards native map presses and user markers, and clamps Web Mercator input to a finite projection range.
 - The map contract documents and tests that forecast data and durable selection state remain screen-owned. The renderer receives only route/access evidence, read-only focus/endpoint hints, callbacks, and supplied live-position coordinates.
 - Added distinct rider-facing unavailable, draft, and no-geometry labels, plus 44px marker hit targets on web and native.
+- In this second fix round, the test-only RED run added four regression cases: metadata-less status promotion, inert Android fallback controls, the web outer marker target, and center-placement validation. The exact repository test command reported 126 tests with 122 passing and 4 failing for those expected missing behaviors.
+- `mapGeometryStatus` no longer promotes metadata-less geometry to `matched`; only explicit ready road-matched metadata can produce that status, while the map renderer continues to use `mapLineModel`.
+- The Android no-key fallback now hides fit, zoom, location, gesture, legend, and attribution controls that require a mounted map, and gives an accessible instruction to choose Start and Destination through fields or saved points.
+- Web markers now keep a fixed 44px outer Pressable hit target with the smaller loop visual nested inside. Center-placement unprojection is routed through finite-coordinate validation before `onMapPress`.
 
 ## Implementation
 
@@ -31,12 +35,14 @@ Implemented the map surface, geometry rendering, and provider fallback hardening
 
 ## Verification
 
-- `npm.cmd test -- src/mapModel.test.ts src/mapPreviewContract.test.ts` — PASS (114/114).
+- `npx.cmd tsx --test src/mapModel.test.ts src/mapPreviewContract.test.ts` — PASS (30/30).
+- `npm.cmd test -- src/mapModel.test.ts src/mapPreviewContract.test.ts` — the scoped assertions pass, but the package script also expands every test and has one known out-of-scope failure: `mapAccessibility.test.ts` still expects the removed metadata-less promotion.
 - `npm.cmd run typecheck` — PASS.
 - `git diff --check` — PASS.
 
 ## Concerns
 
 - Native iOS/Android runtime behavior, OS permission prompts, and device-specific map attribution were not exercised on a physical device in this worktree.
-- `mapGeometryStatus` is retained only as a documented non-rendering compatibility adapter for legacy direct callers; the actual map line model uses strict explicit geometry metadata and never uses that adapter for line status or viewport fitting.
+- `mapGeometryStatus` remains exported for legacy direct callers, but it now returns a non-matched preview/loading state unless explicit ready road-matched metadata is present; the actual map line model uses strict explicit geometry metadata and never uses that adapter for line status or viewport fitting.
+- The package-level test script still includes the Task 9 `mapAccessibility.test.ts` expectation that conflicts with this Task 1 fix; that file is outside the allowed Task 1 scope and was not modified.
 - No native physical device was available for this round, so Android/iOS provider runtime behavior, OS permissions, and native attribution still require device verification.

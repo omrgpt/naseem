@@ -6,11 +6,12 @@ import type { MapPreviewProps, MapText } from "./MapPreview";
 import {
   MAP_BOTTOM_SAFE_ZONE,
   MAP_CONTROL_CLEARANCE,
-  MAP_MARKER_HIT_SIZE,
+  MAP_MARKER_HIT_TARGET,
   hasFiniteCoordinate,
   mapDisplayBounds,
   selectMapProvider,
   shouldShowMinimalMapControls,
+  shouldShowNativeMapControls,
   shouldShowUserLocationControl,
 } from "./mapPreviewContract";
 import {
@@ -69,10 +70,10 @@ export function MapPreview({
     googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY,
   });
   const nativeMapUnavailable = mapProvider === "native-fallback";
-  const showUserLocationControl = shouldShowUserLocationControl(
-    showUserLocation,
-    userCoordinate,
-  );
+  const showNativeMapControls = shouldShowNativeMapControls(nativeMapUnavailable);
+  const showUserLocationControl =
+    showNativeMapControls &&
+    shouldShowUserLocationControl(showUserLocation, userCoordinate);
   const lineModel = mapLineModel(route, mapText?.status);
   const { linePoints, lineStyle, roadMatched } = lineModel;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
@@ -197,8 +198,11 @@ export function MapPreview({
     statusDraft: rtl ? "مسودة المسار" : "ROUTE DRAFT",
     statusEmpty: rtl ? "لا توجد هندسة للمسار" : "NO ROUTE GEOMETRY",
     providerUnavailable: rtl
-      ? "يحتاج مزود الخريطة إلى إعداد؛ يبقى المسار متاحاً."
-      : "Map provider needs configuration; the route remains available.",
+      ? "تعذر عرض الخريطة هنا؛ يبقى المسار متاحاً."
+      : "The map is unavailable here; the route remains available.",
+    providerFallbackHint: rtl
+      ? "اختر البداية والوجهة من الحقول أو النقاط المحفوظة."
+      : "Choose Start and Destination using the fields or saved points.",
     zoomIn: rtl ? "تكبير الخريطة" : "Zoom in",
     zoomOut: rtl ? "تصغير الخريطة" : "Zoom out",
     distanceUnit: rtl ? "كم" : "km",
@@ -314,6 +318,9 @@ export function MapPreview({
         >
           <Text style={[styles.providerNoticeText, rtl && styles.arabicMeta]}>
             {nativeProviderMessage}
+          </Text>
+          <Text style={[styles.providerFallbackHint, rtl && styles.arabicMeta]}>
+            {text.providerFallbackHint}
           </Text>
           <Text style={[styles.mapFootText, rtl && styles.arabicMeta]}>
             {text.native}
@@ -545,7 +552,7 @@ export function MapPreview({
           </View>
         </Pressable>
       )}
-      {!compact && !minimal && (
+      {showNativeMapControls && !compact && !minimal && (
         <View
           style={styles.zoomControls}
           accessibilityRole="toolbar"
@@ -571,14 +578,14 @@ export function MapPreview({
           </Pressable>
         </View>
       )}
-      {!compact && !minimal && (
+      {showNativeMapControls && !compact && !minimal && (
         <View style={styles.gestureHint} pointerEvents="none">
           <Text style={[styles.gestureHintText, rtl && styles.arabicMeta]}>
             {text.gestures}
           </Text>
         </View>
       )}
-      {!compact && !minimal && (
+      {showNativeMapControls && !compact && !minimal && (
         <View style={styles.legend} pointerEvents="none">
           {(["dedicated", "mixed", "restricted", "unknown"] as RoadKind[]).map(
             (kind) => (
@@ -600,7 +607,7 @@ export function MapPreview({
           )}
         </View>
       )}
-      {!compact && !minimal && (
+      {showNativeMapControls && !compact && !minimal && (
         <View style={styles.mapFoot} pointerEvents="none">
           <Text
             style={[
@@ -613,7 +620,7 @@ export function MapPreview({
           </Text>
         </View>
       )}
-      {!compact && !minimal && (
+      {showNativeMapControls && !compact && !minimal && (
         <Pressable
           testID="map-fit-route"
           accessibilityRole="button"
@@ -626,7 +633,7 @@ export function MapPreview({
           </Text>
         </Pressable>
       )}
-      {showMinimalControls && (
+      {showNativeMapControls && showMinimalControls && (
         <View
           style={[styles.minimalControls, rtl && styles.minimalControlsRtl]}
           accessibilityRole="toolbar"
@@ -727,6 +734,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 24,
     backgroundColor: "#E9F0F0",
+  },
+  providerFallbackHint: {
+    marginTop: 8,
+    maxWidth: "90%",
+    color: "#38575B",
+    fontFamily: FONT_REGULAR,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
   },
   providerFallbackPoints: {
     alignSelf: "stretch",
@@ -830,8 +846,7 @@ const styles = StyleSheet.create({
     borderColor: "#FFFFFF",
   },
   markerHitTarget: {
-    width: MAP_MARKER_HIT_SIZE,
-    height: MAP_MARKER_HIT_SIZE,
+    ...MAP_MARKER_HIT_TARGET,
     alignItems: "center",
     justifyContent: "center",
   },

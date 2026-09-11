@@ -22,11 +22,13 @@ import type { Coordinate, RoadKind, RoutePlan } from "./domain";
 import type { MapPreviewProps } from "./MapPreview";
 import {
   MAP_MARKER_HIT_SIZE,
+  MAP_MARKER_HIT_TARGET,
   hasFiniteCoordinate,
   mapControlLayout,
   mapDisplayBounds,
   shouldShowMinimalMapControls,
   shouldShowUserLocationControl,
+  validMapPressCoordinate,
 } from "./mapPreviewContract";
 import {
   mapIsLoop,
@@ -278,7 +280,7 @@ export function MapPreview({
   };
   const pointAtMapCenter = () => {
     if (!onMapPress) return;
-    onMapPress(
+    const coordinate = validMapPressCoordinate(
       unproject(
         {
           x: centerWorld.x - panRef.current.x,
@@ -287,6 +289,8 @@ export function MapPreview({
         zoom,
       ),
     );
+    if (!coordinate) return;
+    onMapPress(coordinate);
   };
   const clampPan = (next: { x: number; y: number }) => ({
     x: Math.max(-width * 0.45, Math.min(width * 0.45, next.x)),
@@ -635,15 +639,22 @@ export function MapPreview({
                     left: entry.position.x - MAP_MARKER_HIT_SIZE / 2,
                     top: entry.position.y - MAP_MARKER_HIT_SIZE / 2,
                   },
-                  entry.isStart && styles.startMarker,
-                  entry.isLoop && entry.isStart && styles.loopMarker,
-                  !entry.isLoop &&
-                    !entry.isStart &&
-                    !entry.isEnd &&
-                    styles.midMarker,
                 ]}
               >
-                <Text style={styles.markerText}>{markerText}</Text>
+                <View
+                  accessible={false}
+                  style={[
+                    styles.markerVisual,
+                    entry.isStart && styles.startMarker,
+                    entry.isLoop && entry.isStart && styles.loopMarker,
+                    !entry.isLoop &&
+                      !entry.isStart &&
+                      !entry.isEnd &&
+                      styles.midMarker,
+                  ]}
+                >
+                  <Text style={styles.markerText}>{markerText}</Text>
+                </View>
               </Pressable>
             );
           })}
@@ -1072,12 +1083,16 @@ const styles = StyleSheet.create({
   routeOverlay: { ...StyleSheet.absoluteFill },
   webMarker: {
     position: "absolute",
-    minHeight: MAP_MARKER_HIT_SIZE,
-    minWidth: MAP_MARKER_HIT_SIZE,
-    paddingHorizontal: 3,
+    ...MAP_MARKER_HIT_TARGET,
     borderRadius: MAP_MARKER_HIT_SIZE / 2,
     justifyContent: "center",
     alignItems: "center",
+  },
+  markerVisual: {
+    minHeight: 28,
+    minWidth: 28,
+    paddingHorizontal: 3,
+    borderRadius: 14,
     backgroundColor: "#102A2E",
     borderWidth: 2,
     borderColor: "#FFFFFF",
