@@ -124,7 +124,10 @@ meaningful stopping point.
 
 ## Terminal verification
 
-- Current HEAD: `0e82e2c` (`fix(ride): preserve live watcher callbacks`).
+- Implementation HEAD before the final documentation commits: `0e82e2c`
+  (`fix(ride): preserve live watcher callbacks`).
+- Documentation commits: `00964ce` (terminal checkpoint update) and `6372630`
+  (required Task 4 report).
 - Task 4 implementation commits, in order:
   - `b75c5d5` — resolve shared-loop finish progress.
   - `da5a802` — checkpoint live telemetry and recovery contracts.
