@@ -22,21 +22,24 @@ import { segmentIndexForProgress } from "./routeProgress";
 import { formatBahrainTime, BAHRAIN_LOCALES } from "./routeTime";
 import { createStatefulRouteMatcher, matchStateLabel } from "./routeMatcher";
 import {
-  createCompletionDraft,
-  createRecordingOnlyCompletionDraft,
+  createActiveDraftCheckpoint,
   createRecordingOnlySnapshot,
   countLocationGaps,
   classifyLocationFailure,
   completionStateForDraft,
   isBrowserLocationAvailable,
+  liveRideLocationState,
   locationUnavailableCopy,
   locationWatchdogState,
   permissionStateFromResult,
+  recordingTelemetry,
+  remainingRideDurationMinutes,
   shouldMarkLocationStale,
   transitionLiveRideState,
   watchBrowserLocation,
   LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS,
   type LiveRideCompletionState,
+  type LiveRideLocationState,
   type LiveRidePermissionState,
   type LiveRideStateName,
   type BrowserLocationPosition,
@@ -117,6 +120,10 @@ export type LiveRideSession = {
     match?: PositionMatch;
     lastFixAt?: string;
     lastFixLabel?: string;
+    locationState?: LiveRideLocationState;
+    recordedDistanceLabel?: string;
+    recordedDurationLabel?: string;
+    fixCount?: number;
     activeRoute?: RoutePlan;
     isPaused: boolean;
     canPause: boolean;
@@ -158,11 +165,15 @@ export function useLiveRideSession({
   analysisKey,
   policy = DEFAULT_WAYPOINT_TRACE_LIVE_RIDE_POLICY,
   formatDistance = (value) => `${value.toFixed(1)} km`,
-  formatDuration = (value) => `${value} min`,
+  formatDuration: customFormatDuration,
   formatTime = (value) => formatBahrainTime(value, BAHRAIN_LOCALES.en),
   formatAccuracy = (value) => `${Math.round(value)} m`,
   onPosition,
 }: LiveRideSessionOptions): LiveRideSession {
+  const formatDuration =
+    customFormatDuration ??
+    ((value: number) =>
+      `${value} ${/[\u0600-\u06ff]/.test(Object.values(messages ?? {}).join(" ")) ? "دقيقة" : "min"}`);
   const waitingMessage = messages?.waiting ?? "Waiting for you to start.";
   const permissionStartMessage =
     messages?.permissionStart ??
@@ -235,6 +246,7 @@ export function useLiveRideSession({
   const [isPaused, setIsPaused] = useState(false);
   const [position, setPosition] = useState<LiveRideSession["position"]>({
     progress: 0,
+    locationState: "waiting",
     isPaused: false,
     canPause: false,
   });
@@ -275,6 +287,30 @@ export function useLiveRideSession({
     openPauseRef.current = null;
     return intervals;
   };
+  const checkpointActiveDraft = (
+    snapshot: ActiveRideSnapshot | RecordingOnlySnapshot,
+    endedAt: string | Date = new Date(),
+  ) => {
+    const checkpointAt = new Date(endedAt).toISOString();
+    const pausedIntervals: RidePauseInterval[] = pauseIntervalsRef.current.map(
+      (interval) => ({
+        startedAt: interval.startedAt,
+        endedAt: interval.endedAt ?? checkpointAt,
+      }),
+    );
+    setCompletionDraft(
+      createActiveDraftCheckpoint(snapshot, {
+        endedAt: checkpointAt,
+        samples: samplesRef.current,
+        matchHistory: matchHistoryRef.current,
+        ...( "route" in snapshot && snapshot.route.analysis
+          ? { analysisSnapshot: snapshot.route.analysis }
+          : {}),
+        gaps: countLocationGaps(samplesRef.current, 45, pausedIntervals),
+        pausedIntervals,
+      }),
+    );
+  };
 
   useEffect(() => {
     if (activeSnapshot) return;
@@ -289,7 +325,12 @@ export function useLiveRideSession({
       openPauseRef.current = null;
       lastFixReceivedAtRef.current = null;
       setIsPaused(false);
-      setPosition({ progress: 0, isPaused: false, canPause: false });
+      setPosition({
+        progress: 0,
+        locationState: "waiting",
+        isPaused: false,
+        canPause: false,
+      });
       setSegmentIndex(-1);
       progressRef.current = 0;
       matcherRef.current = null;
@@ -319,7 +360,12 @@ export function useLiveRideSession({
     openPauseRef.current = null;
     lastFixReceivedAtRef.current = null;
     setIsPaused(false);
-    setPosition({ progress: 0, isPaused: false, canPause: false });
+    setPosition({
+      progress: 0,
+      locationState: "waiting",
+      isPaused: false,
+      canPause: false,
+    });
     setSegmentIndex(-1);
     progressRef.current = 0;
     matcherRef.current = null;
@@ -421,6 +467,7 @@ export function useLiveRideSession({
         const progress = previousMatch?.progress ?? current.progress;
         return {
           ...current,
+          locationState: "stale",
           match: {
             routeDistanceKm:
               previousMatch?.routeDistanceKm ??
@@ -444,6 +491,25 @@ export function useLiveRideSession({
       markWatchdogStale,
       LIVE_RIDE_LOCATION_WATCHDOG_TIMEOUT_MS / 6,
     );
+    const recordingTelemetryTimer = recordingOnly
+      ? setInterval(() => {
+          if (cancelled || !activeSnapshot || "route" in activeSnapshot) return;
+          const telemetry = recordingTelemetry({
+            startedAt: activeSnapshot.startedAt,
+            now: new Date(),
+            samples: samplesRef.current,
+            pausedIntervals: pauseIntervalsRef.current,
+          });
+          setPosition((current) => ({
+            ...current,
+            recordedDistanceLabel: formatDistance(telemetry.distanceMeters / 1_000),
+            recordedDurationLabel: formatDuration(
+              Math.round(telemetry.elapsedSeconds / 60),
+            ),
+            fixCount: telemetry.fixCount,
+          }));
+        }, 1_000)
+      : undefined;
     const handleLocation = (
       location: Location.LocationObject | BrowserLocationPosition,
     ) => {
@@ -466,6 +532,7 @@ export function useLiveRideSession({
             lastFixAt: timestamp,
             lastFixLabel: formatTime(timestamp),
             ...(accuracyLabel ? { accuracyLabel } : {}),
+            locationState: recordingOnly ? "near" : current.locationState,
             isPaused: true,
             canPause: true,
           }));
@@ -492,19 +559,40 @@ export function useLiveRideSession({
           ? Math.max(0, activePlan.distanceKm * (1 - nextProgress))
           : 0;
         const etaMinutes = activePlan
-          ? Math.round((activePlan.durationMinutes || 1) * (1 - nextProgress))
+          ? remainingRideDurationMinutes(
+              activePlan.durationMinutes || 1,
+              nextProgress,
+            )
           : 0;
+        const telemetry = recordingOnly
+          ? recordingTelemetry({
+              startedAt: activeSnapshot.startedAt,
+              now: timestamp,
+              samples: samplesRef.current,
+              pausedIntervals: pauseIntervalsRef.current,
+            })
+          : undefined;
         const nextPosition = {
           coordinate,
           progress: nextProgress,
+          locationState: recordingOnly
+            ? "near"
+            : liveRideLocationState(match?.state, true),
           ...(activePlan
             ? { remainingLabel: formatDistance(remainingKm) }
             : {}),
           ...(activePlan
+            ? { etaLabel: formatDuration(etaMinutes) }
+            : {}),
+          ...(telemetry
             ? {
-                etaLabel: formatTime(
-                  new Date(Date.now() + etaMinutes * 60_000).toISOString(),
+                recordedDistanceLabel: formatDistance(
+                  telemetry.distanceMeters / 1_000,
                 ),
+                recordedDurationLabel: formatDuration(
+                  Math.round(telemetry.elapsedSeconds / 60),
+                ),
+                fixCount: telemetry.fixCount,
               }
             : {}),
           accuracyLabel,
@@ -518,6 +606,7 @@ export function useLiveRideSession({
               : undefined,
           ...(match ? { match } : {}),
         };
+        checkpointActiveDraft(activeSnapshot, timestamp);
         setPosition(nextPosition);
         setSegmentIndex(
           activePlan && match?.state === "matched"
@@ -565,6 +654,7 @@ export function useLiveRideSession({
     return () => {
       cancelled = true;
       clearInterval(watchdog);
+      if (recordingTelemetryTimer) clearInterval(recordingTelemetryTimer);
       subscription?.remove();
     };
   }, [
@@ -573,6 +663,7 @@ export function useLiveRideSession({
     formatDistance,
     formatTime,
     formatAccuracy,
+    formatDuration,
     onPosition,
     liveActiveMessage,
     permissionDeniedRecoveryMessage,
@@ -675,7 +766,6 @@ export function useLiveRideSession({
           const recordingSnapshot = createRecordingOnlySnapshot(new Date());
           setActiveSnapshot(recordingSnapshot);
           setEndedSnapshot(null);
-          setCompletionDraft(null);
           samplesRef.current = [];
           matchHistoryRef.current = [];
           progressRef.current = 0;
@@ -684,7 +774,16 @@ export function useLiveRideSession({
           openPauseRef.current = null;
           lastFixReceivedAtRef.current = null;
           setIsPaused(false);
-          setPosition({ progress: 0, isPaused: false, canPause: true });
+          setPosition({
+            progress: 0,
+            locationState: "waiting",
+            recordedDistanceLabel: formatDistance(0),
+            recordedDurationLabel: formatDuration(0),
+            fixCount: 0,
+            isPaused: false,
+            canPause: true,
+          });
+          checkpointActiveDraft(recordingSnapshot, recordingSnapshot.startedAt);
           setState(transitionLiveRideState("requesting", "permission-granted"));
           setStatusMessage(recordingStartedMessage);
           return;
@@ -705,7 +804,6 @@ export function useLiveRideSession({
         }
         setActiveSnapshot(started.snapshot);
         setEndedSnapshot(null);
-        setCompletionDraft(null);
         samplesRef.current = [];
         matchHistoryRef.current = [];
         pauseIntervalsRef.current = [];
@@ -717,7 +815,13 @@ export function useLiveRideSession({
         progressRef.current = 0;
         pausedRef.current = false;
         setIsPaused(false);
-        setPosition({ progress: 0, isPaused: false, canPause: true });
+        setPosition({
+          progress: 0,
+          locationState: "waiting",
+          isPaused: false,
+          canPause: true,
+        });
+        checkpointActiveDraft(started.snapshot, started.snapshot.startedAt);
         setState(transitionLiveRideState("requesting", "permission-granted"));
         setStatusMessage(liveStartedMessage);
       } catch (error) {
@@ -792,6 +896,10 @@ export function useLiveRideSession({
           setPermission("granted");
           setState("active");
           lastFixReceivedAtRef.current = null;
+          setPosition((current) => ({
+            ...current,
+            locationState: "waiting",
+          }));
           setWatchAttempt((attempt) => attempt + 1);
           setStatusMessage(
             recordingOnly ? recordingActiveMessage : liveActiveMessage,
@@ -849,23 +957,16 @@ export function useLiveRideSession({
       "route" in activeSnapshot
         ? endActiveRide(activeSnapshot, endedAt).snapshot
         : activeSnapshot;
-    const draft =
-      "route" in activeSnapshot
-        ? createCompletionDraft(activeSnapshot, {
-            endedAt,
-            samples: samplesRef.current,
-            matchHistory: matchHistoryRef.current,
-            analysisSnapshot: activeSnapshot.route.analysis,
-            gaps: countLocationGaps(samplesRef.current, 45, pausedIntervals),
-            pausedIntervals,
-          })
-        : createRecordingOnlyCompletionDraft(activeSnapshot, {
-            endedAt,
-            samples: samplesRef.current,
-            matchHistory: matchHistoryRef.current,
-            gaps: countLocationGaps(samplesRef.current, 45, pausedIntervals),
-            pausedIntervals,
-          });
+    const draft = createActiveDraftCheckpoint(activeSnapshot, {
+      endedAt,
+      samples: samplesRef.current,
+      matchHistory: matchHistoryRef.current,
+      ...( "route" in activeSnapshot && activeSnapshot.route.analysis
+        ? { analysisSnapshot: activeSnapshot.route.analysis }
+        : {}),
+      gaps: countLocationGaps(samplesRef.current, 45, pausedIntervals),
+      pausedIntervals,
+    });
     setEndedSnapshot(endedSnapshot);
     setCompletionDraft(draft);
     setActiveSnapshot(null);
@@ -928,7 +1029,32 @@ export function useLiveRideSession({
     pauseIntervalsRef.current.push(interval);
     openPauseRef.current = interval;
     setIsPaused(true);
-    setPosition((current) => ({ ...current, isPaused: true, canPause: true }));
+    const telemetry =
+      recordingOnly && activeSnapshot && !("route" in activeSnapshot)
+        ? recordingTelemetry({
+            startedAt: activeSnapshot.startedAt,
+            now: interval.startedAt,
+            samples: samplesRef.current,
+            pausedIntervals: pauseIntervalsRef.current,
+          })
+        : undefined;
+    setPosition((current) => ({
+      ...current,
+      ...(telemetry
+        ? {
+            recordedDistanceLabel: formatDistance(
+              telemetry.distanceMeters / 1_000,
+            ),
+            recordedDurationLabel: formatDuration(
+              Math.round(telemetry.elapsedSeconds / 60),
+            ),
+            fixCount: telemetry.fixCount,
+          }
+        : {}),
+      isPaused: true,
+      canPause: true,
+    }));
+    checkpointActiveDraft(activeSnapshot, interval.startedAt);
     setStatusMessage(recordingPausedMessage);
   };
 
@@ -941,7 +1067,33 @@ export function useLiveRideSession({
     }
     lastFixReceivedAtRef.current = Date.now();
     setIsPaused(false);
-    setPosition((current) => ({ ...current, isPaused: false, canPause: true }));
+    const resumedAt = new Date().toISOString();
+    const telemetry =
+      recordingOnly && activeSnapshot && !("route" in activeSnapshot)
+        ? recordingTelemetry({
+            startedAt: activeSnapshot.startedAt,
+            now: resumedAt,
+            samples: samplesRef.current,
+            pausedIntervals: pauseIntervalsRef.current,
+          })
+        : undefined;
+    setPosition((current) => ({
+      ...current,
+      ...(telemetry
+        ? {
+            recordedDistanceLabel: formatDistance(
+              telemetry.distanceMeters / 1_000,
+            ),
+            recordedDurationLabel: formatDuration(
+              Math.round(telemetry.elapsedSeconds / 60),
+            ),
+            fixCount: telemetry.fixCount,
+          }
+        : {}),
+      isPaused: false,
+      canPause: true,
+    }));
+    checkpointActiveDraft(activeSnapshot, resumedAt);
     setStatusMessage(recordingResumedMessage);
   };
 

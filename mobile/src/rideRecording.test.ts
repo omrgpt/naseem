@@ -411,3 +411,177 @@ test("a failed save can be returned to a draft for an explicit retry", () => {
   failed.completionState = "save_failed";
   assert.equal(retry?.(failed).completionState, "draft");
 });
+
+test("live ride location states distinguish waiting, near, away, uncertain, and stale", () => {
+  const getState = (recording as unknown as Record<string, unknown>)
+    .liveRideLocationState as
+    | ((matchState?: string, hasFix?: boolean) => string)
+    | undefined;
+  assert.equal(typeof getState, "function");
+  assert.equal(getState?.(undefined, false), "waiting");
+  assert.equal(getState?.("approaching", true), "near");
+  assert.equal(getState?.("matched", true), "near");
+  assert.equal(getState?.("off-corridor", true), "away");
+  assert.equal(getState?.("uncertain", true), "uncertain");
+  assert.equal(getState?.("stale", true), "stale");
+});
+
+test("recording-only telemetry exposes distance, moving time, fix count, and last fix", () => {
+  const getTelemetry = (recording as unknown as Record<string, unknown>)
+    .recordingTelemetry as
+    | ((input: {
+        startedAt: string;
+        now: string;
+        samples: unknown[];
+        pausedIntervals?: unknown[];
+      }) => {
+        distanceMeters: number;
+        elapsedSeconds: number;
+        fixCount: number;
+        lastFixAt?: string;
+      })
+    | undefined;
+  assert.equal(typeof getTelemetry, "function");
+  const samples = [
+    {
+      coordinate: { latitude: 26.1, longitude: 50.5 },
+      timestamp: "2026-09-10T14:00:00.000Z",
+    },
+    {
+      coordinate: { latitude: 26.101, longitude: 50.501 },
+      timestamp: "2026-09-10T14:05:00.000Z",
+    },
+  ];
+  const telemetry = getTelemetry?.({
+    startedAt: "2026-09-10T14:00:00.000Z",
+    now: "2026-09-10T14:06:00.000Z",
+    samples,
+  });
+  assert.ok(telemetry);
+  assert.ok((telemetry?.distanceMeters ?? 0) > 0);
+  assert.equal(telemetry?.elapsedSeconds, 360);
+  assert.equal(telemetry?.fixCount, 2);
+  assert.equal(telemetry?.lastFixAt, "2026-09-10T14:05:00.000Z");
+});
+
+test("recording-only telemetry labels are localized and do not promise route progress", () => {
+  const getLabels = (recording as unknown as Record<string, unknown>)
+    .recordingOnlyTelemetryLabels as
+    | ((arabic?: boolean) => Record<string, string>)
+    | undefined;
+  assert.equal(typeof getLabels, "function");
+  assert.deepEqual(getLabels?.(), {
+    distance: "Recorded distance",
+    time: "Moving time",
+    fixes: "Location fixes",
+    lastFix: "Last fix",
+    waiting: "Waiting for your first location fix",
+  });
+  const arabic = getLabels?.(true);
+  assert.ok(arabic);
+  assert.ok(Object.values(arabic ?? {}).every((label) => !/[A-Za-z]/.test(label)));
+  assert.match(arabic?.waiting ?? "", /الموقع/);
+});
+
+test("remaining ride duration is a duration, not an arrival clock", () => {
+  const getDuration = (recording as unknown as Record<string, unknown>)
+    .remainingRideDurationMinutes as
+    | ((totalMinutes: number, progress: number) => number)
+    | undefined;
+  assert.equal(typeof getDuration, "function");
+  assert.equal(getDuration?.(52, 0.2), 42);
+  assert.equal(getDuration?.(52, 1), 0);
+});
+
+test("active draft checkpoints stay recoverable through the existing completion boundary", () => {
+  const createCheckpoint = (recording as unknown as Record<string, unknown>)
+    .createActiveDraftCheckpoint as
+    | ((snapshot: unknown, input: unknown) => {
+        completionState: string;
+        routeSnapshot: unknown;
+        observedSamples: unknown[];
+      })
+    | undefined;
+  assert.equal(typeof createCheckpoint, "function");
+  const snapshot = createRecordingOnlySnapshot("2026-09-10T14:00:00.000Z", "checkpoint-test");
+  const samples = [
+    {
+      coordinate: { latitude: 26.1, longitude: 50.5 },
+      timestamp: "2026-09-10T14:01:00.000Z",
+    },
+  ];
+  const draft = createCheckpoint?.(snapshot, {
+    endedAt: "2026-09-10T14:01:00.000Z",
+    samples,
+  });
+  assert.equal(draft?.completionState, "draft");
+  assert.equal(draft?.routeSnapshot, null);
+  assert.deepEqual(draft?.observedSamples, samples);
+});
+
+test("zero-fix completion is distinguishable from a captured track", () => {
+  const getTrackState = (recording as unknown as Record<string, unknown>)
+    .completionTrackState as
+    | ((draft: unknown) => string)
+    | undefined;
+  assert.equal(typeof getTrackState, "function");
+  const snapshot = createRecordingOnlySnapshot("2026-09-10T14:00:00.000Z", "zero-fix-test");
+  const draft = createRecordingOnlyCompletionDraft(snapshot, {
+    endedAt: "2026-09-10T14:01:00.000Z",
+  });
+  assert.equal(getTrackState?.(draft), "no-fix");
+  draft.observedSamples.push({
+    coordinate: { latitude: 26.1, longitude: 50.5 },
+    timestamp: "2026-09-10T14:00:30.000Z",
+  });
+  assert.equal(getTrackState?.(draft), "captured");
+});
+
+test("recovery actions keep retry, pause-or-resume, and end reachable", () => {
+  const getActions = (recording as unknown as Record<string, unknown>)
+    .liveRideRecoveryActions as
+    | ((input: {
+        active: boolean;
+        locationState: string;
+        isPaused: boolean;
+      }) => string[])
+    | undefined;
+  assert.equal(typeof getActions, "function");
+  assert.deepEqual(
+    getActions?.({ active: true, locationState: "away", isPaused: false }),
+    ["retryLocation", "pause", "end"],
+  );
+  assert.deepEqual(
+    getActions?.({ active: true, locationState: "stale", isPaused: true }),
+    ["retryLocation", "resume", "end"],
+  );
+  assert.deepEqual(
+    getActions?.({ active: true, locationState: "near", isPaused: false }),
+    ["pause", "end"],
+  );
+  assert.deepEqual(
+    getActions?.({ active: false, locationState: "waiting", isPaused: false }),
+    [],
+  );
+});
+
+test("completion action states distinguish save/export busy and error states", () => {
+  const getActionStates = (recording as unknown as Record<string, unknown>)
+    .completionActionStates as
+    | ((draft: unknown, options?: unknown) => {
+        save: string;
+        export: string;
+      })
+    | undefined;
+  assert.equal(typeof getActionStates, "function");
+  const snapshot = createRecordingOnlySnapshot("2026-09-10T14:00:00.000Z", "action-state-test");
+  const draft = createRecordingOnlyCompletionDraft(snapshot, {
+    endedAt: "2026-09-10T14:01:00.000Z",
+  });
+  assert.deepEqual(getActionStates?.(draft), { save: "idle", export: "idle" });
+  assert.deepEqual(getActionStates?.(draft, { saving: true }), { save: "busy", export: "idle" });
+  draft.completionState = "save_failed";
+  assert.deepEqual(getActionStates?.(draft), { save: "error", export: "idle" });
+  assert.deepEqual(getActionStates?.(draft, { exporting: true }), { save: "error", export: "busy" });
+  assert.deepEqual(getActionStates?.(draft, { exportError: true }), { save: "error", export: "error" });
+});

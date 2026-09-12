@@ -68,6 +68,193 @@ export type RecordingControlLabels = Readonly<{
   continue: string;
 }>;
 
+export type LiveRideLocationState =
+  | "away"
+  | "near"
+  | "waiting"
+  | "uncertain"
+  | "stale";
+
+export function liveRideLocationState(
+  matchState?: PositionMatchState,
+  hasFix = false,
+): LiveRideLocationState {
+  if (!hasFix) return "waiting";
+  if (matchState === "off-corridor") return "away";
+  if (matchState === "stale") return "stale";
+  if (matchState === "approaching" || matchState === "matched") return "near";
+  return "uncertain";
+}
+
+export type LiveRideRecoveryAction =
+  | "retryLocation"
+  | "pause"
+  | "resume"
+  | "end";
+
+export function liveRideRecoveryActions({
+  active,
+  locationState,
+  isPaused,
+}: {
+  active: boolean;
+  locationState: LiveRideLocationState;
+  isPaused: boolean;
+}): LiveRideRecoveryAction[] {
+  if (!active) return [];
+  const actions: LiveRideRecoveryAction[] = [];
+  if (
+    locationState === "waiting" ||
+    locationState === "away" ||
+    locationState === "stale"
+  )
+    actions.push("retryLocation");
+  actions.push(isPaused ? "resume" : "pause", "end");
+  return actions;
+}
+
+export type LiveRideRecoveryLabels = Readonly<{
+  waiting: string;
+  near: string;
+  away: string;
+  uncertain: string;
+  stale: string;
+  retry: string;
+  lastFix: string;
+  noFix: string;
+  recovery: string;
+  progressPaused: string;
+  noTrack: string;
+  exporting: string;
+  exportFailed: string;
+  saving: string;
+  fixCount: string;
+}>;
+
+export function liveRideRecoveryLabels(arabic = false): LiveRideRecoveryLabels {
+  return arabic
+    ? {
+        waiting: "بانتظار أول إشارة إلى الموقع",
+        near: "تم التقاط موقعك الحالي",
+        away: "أنت بعيد عن المسار",
+        uncertain: "الموقع غير مؤكد",
+        stale: "تحديث الموقع قديم",
+        retry: "إعادة محاولة تحديد الموقع",
+        lastFix: "آخر إشارة",
+        noFix: "لم تُلتقط إشارة موقع بعد",
+        recovery:
+          "راجع الخريطة وما حولك. سيبقى التقدم متوقفاً حتى تصل إشارة موثوقة. يمكنك إعادة المحاولة أو الإيقاف المؤقت أو المتابعة أو إنهاء الرحلة والاحتفاظ بالتسجيل.",
+        progressPaused: "تم إيقاف التقدم حتى تتم مطابقة المسار بثقة.",
+        noTrack:
+          "لم تُلتقط أي إشارات للموقع، لذلك لا يوجد مسار لعرضه. يمكنك حفظ هذا السجل أو حذفه.",
+        exporting: "جارٍ تصدير الرحلة…",
+        exportFailed: "تعذر تصدير الرحلة. حاول مرة أخرى.",
+        saving: "جارٍ حفظ الرحلة…",
+        fixCount: "إشارات الموقع",
+      }
+    : {
+        waiting: "Waiting for your first location fix",
+        near: "Current position captured",
+        away: "Away from route",
+        uncertain: "Location uncertain",
+        stale: "Location update is stale",
+        retry: "Retry location",
+        lastFix: "Last fix",
+        noFix: "No location fix yet",
+        recovery:
+          "Check the map and surroundings. Progress stays paused until the next confident fix. You can retry, pause, continue, or end and keep this recording.",
+        progressPaused: "Progress is paused until the route match is confident.",
+        noTrack:
+          "No location fixes were captured, so there is no track to show. You can save this record or discard it.",
+        exporting: "Exporting ride…",
+        exportFailed: "The ride could not be exported. Try again.",
+        saving: "Saving ride…",
+        fixCount: "Location fixes",
+      };
+}
+
+export type RecordingTelemetryLabels = Readonly<{
+  distance: string;
+  time: string;
+  fixes: string;
+  lastFix: string;
+  waiting: string;
+}>;
+
+export function recordingOnlyTelemetryLabels(
+  arabic = false,
+): RecordingTelemetryLabels {
+  return arabic
+    ? {
+        distance: "المسافة المسجلة",
+        time: "وقت الحركة",
+        fixes: "إشارات الموقع",
+        lastFix: "آخر إشارة",
+        waiting: "بانتظار أول إشارة إلى الموقع",
+      }
+    : {
+        distance: "Recorded distance",
+        time: "Moving time",
+        fixes: "Location fixes",
+        lastFix: "Last fix",
+        waiting: "Waiting for your first location fix",
+      };
+}
+
+export type RecordingTelemetry = Readonly<{
+  distanceMeters: number;
+  elapsedSeconds: number;
+  fixCount: number;
+  lastFixAt?: string;
+}>;
+
+export function recordingTelemetry({
+  startedAt,
+  now,
+  samples,
+  pausedIntervals = [],
+}: {
+  startedAt: string | Date;
+  now: string | Date;
+  samples: readonly RecordedSample[];
+  pausedIntervals?: readonly Readonly<{
+    startedAt: string;
+    endedAt?: string;
+  }>[];
+}): RecordingTelemetry {
+  const endedAt = toIso(now);
+  const closedPauseIntervals = closePauseIntervals(pausedIntervals, endedAt);
+  const capturedSamples = [...samples];
+  return {
+    distanceMeters: recordedDistanceMeters(
+      capturedSamples,
+      closedPauseIntervals,
+    ),
+    elapsedSeconds: movingDurationSeconds(
+      startedAt,
+      endedAt,
+      closedPauseIntervals,
+    ),
+    fixCount: capturedSamples.length,
+    ...(capturedSamples.at(-1)
+      ? { lastFixAt: capturedSamples.at(-1)!.timestamp }
+      : {}),
+  };
+}
+
+export function remainingRideDurationMinutes(
+  totalMinutes: number,
+  progress: number,
+): number {
+  const safeTotalMinutes = Number.isFinite(totalMinutes)
+    ? Math.max(0, totalMinutes)
+    : 0;
+  const safeProgress = Number.isFinite(progress)
+    ? Math.min(1, Math.max(0, progress))
+    : 0;
+  return Math.max(0, Math.round(safeTotalMinutes * (1 - safeProgress)));
+}
+
 export type BrowserDownloadEnvironment = {
   Blob?: new (parts: unknown[], options?: { type?: string }) => unknown;
   URL?: {
@@ -410,6 +597,55 @@ export function createRecordingOnlyCompletionDraft(
   };
 }
 
+export function createActiveDraftCheckpoint(
+  snapshot: ActiveRideSnapshot | RecordingOnlySnapshot,
+  input: CompletionDraftInput,
+): ActivityDraft {
+  return "route" in snapshot
+    ? createCompletionDraft(snapshot, input)
+    : createRecordingOnlyCompletionDraft(snapshot, input);
+}
+
+export type CompletionTrackState = "no-fix" | "captured";
+
+export function completionTrackState(
+  draft: Pick<ActivityDraft, "observedSamples">,
+): CompletionTrackState {
+  return draft.observedSamples.length ? "captured" : "no-fix";
+}
+
+export type CompletionActionState = "idle" | "busy" | "error" | "done";
+
+export function completionActionStates(
+  draft: Pick<ActivityDraft, "completionState" | "exportState">,
+  {
+    saving = false,
+    exporting = false,
+    exportError = false,
+  }: {
+    saving?: boolean;
+    exporting?: boolean;
+    exportError?: boolean;
+  } = {},
+): { save: CompletionActionState; export: CompletionActionState } {
+  return {
+    save: saving
+      ? "busy"
+      : draft.completionState === "save_failed"
+        ? "error"
+        : draft.completionState === "saved"
+          ? "done"
+          : "idle",
+    export: exporting
+      ? "busy"
+      : exportError
+        ? "error"
+        : draft.exportState === "exported"
+          ? "done"
+          : "idle",
+  };
+}
+
 export function markActivitySaved(draft: ActivityDraft): ActivityDraft {
   return { ...clone(draft), completionState: "saved" };
 }
@@ -561,6 +797,16 @@ function toIso(value: string | Date) {
   if (!Number.isFinite(date.getTime()))
     throw new RangeError("Expected a valid ride instant.");
   return date.toISOString();
+}
+
+function closePauseIntervals(
+  intervals: readonly Readonly<{ startedAt: string; endedAt?: string }>[],
+  endedAt: string,
+): RidePauseInterval[] {
+  return intervals.map((interval) => ({
+    startedAt: interval.startedAt,
+    endedAt: interval.endedAt ?? endedAt,
+  }));
 }
 
 function pausedMilliseconds(

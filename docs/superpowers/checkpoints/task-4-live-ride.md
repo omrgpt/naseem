@@ -62,3 +62,44 @@ meaningful stopping point.
 - Result: **GREEN** — 29 tests executed, 29 passed, 0 failed.
 - Existing reverse-movement, shared-entry ambiguity, and direct loop-projection
   tests remained green.
+
+## RED evidence — live state, recording, recovery, and completion contracts
+
+- Added failing pure tests in `mobile/src/rideRecording.test.ts` for explicit
+  waiting/near/away/uncertain/stale states, recording-only telemetry and
+  localized labels, recoverable active-draft checkpoints, zero-fix completion,
+  reachable recovery actions, and save/export busy/error states.
+- Command: `npx.cmd --no-install tsx --test src/routeMatcher.test.ts src/routeProgress.test.ts src/rideRecording.test.ts`
+- Result: **RED** — 36 tests executed, 29 passed, 7 failed as expected because
+  the new recording/recovery contracts are not implemented yet.
+
+## GREEN evidence — live state, recording, recovery, and completion contracts
+
+- Implemented the pure contracts in `mobile/src/rideRecording.ts`, including
+  explicit location states, recovery actions and Arabic/English labels,
+  recording-only telemetry, active-draft checkpoints, zero-fix completion,
+  and save/export action-state mapping.
+- Command: `npx.cmd --no-install tsx --test src/routeMatcher.test.ts src/routeProgress.test.ts src/rideRecording.test.ts`
+- Result: **GREEN** — 36 tests executed, 36 passed, 0 failed.
+- The Arabic first-fix copy was verified to contain the explicit `الموقع`
+  wording required by the recovery contract.
+
+## RED evidence — duration semantics
+
+- Added a focused regression test proving that remaining ride time is a
+  duration (`42 min` for 52 total minutes at 20% progress), not an arrival
+  clock value.
+- Command: `npx.cmd --no-install tsx --test src/routeMatcher.test.ts src/routeProgress.test.ts src/rideRecording.test.ts`
+- Result: **RED** — 37 tests executed, 36 passed, 1 failed because the
+  duration contract did not exist yet.
+
+## GREEN evidence — duration semantics and session propagation
+
+- Added `remainingRideDurationMinutes` and changed the session to format ETA
+  as a remaining duration. The session now also propagates explicit location
+  state, recording-only distance/time/fix telemetry, and active-draft
+  checkpoints without changing the route-readiness gate or watcher boundary.
+- Focused command: `npx.cmd --no-install tsx --test src/routeMatcher.test.ts src/routeProgress.test.ts src/rideRecording.test.ts`
+- Result: **GREEN** — 37 tests executed, 37 passed, 0 failed.
+- Typecheck command: `npm.cmd run typecheck`
+- Result: **GREEN** — `tsc --noEmit` completed successfully.
