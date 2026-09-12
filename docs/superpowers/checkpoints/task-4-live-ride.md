@@ -1,6 +1,6 @@
 # Task 4 — Live Ride correctness and recovery
 
-Status: IN PROGRESS
+Status: BLOCKED
 
 ## Worktree and branch
 
@@ -121,3 +121,59 @@ meaningful stopping point.
 - Result: **GREEN** — `tsc --noEmit` completed successfully.
 - Diff check command: `git diff --check -- mobile/src/useLiveRideSession.ts mobile/src/screens/LiveRideScreen.tsx mobile/src/routeMatcher.ts mobile/src/routeProgress.ts mobile/src/rideRecording.ts mobile/src/routeMatcher.test.ts mobile/src/routeProgress.test.ts mobile/src/rideRecording.test.ts docs/superpowers/checkpoints/task-4-live-ride.md`
 - Result: **GREEN** — no whitespace errors in the owned diff.
+
+## Terminal verification
+
+- Current HEAD: `0e82e2c` (`fix(ride): preserve live watcher callbacks`).
+- Task 4 implementation commits, in order:
+  - `b75c5d5` — resolve shared-loop finish progress.
+  - `da5a802` — checkpoint live telemetry and recovery contracts.
+  - `49d0fe7` — make live recovery controls reachable.
+  - `c09c18d` — keep Arabic recovery fallbacks local.
+  - `94733d4` — clear recovery controls after ending.
+  - `0e82e2c` — preserve live watcher callbacks.
+- Owned-file status: clean; unrelated modified and untracked files remain
+  untouched and unstaged.
+- Focused command:
+  `npx.cmd --no-install tsx --test src/routeMatcher.test.ts src/routeProgress.test.ts src/rideRecording.test.ts`
+  — **GREEN**, 37 tests, 37 passed, 0 failed.
+- Full mobile command: `npm.cmd test` — **BLOCKED**, 263 tests, 260 passed,
+  3 failed. The failures are the existing `appIntegration.test.ts` source
+  shape checks for planner text editing, manual-road simplification, and
+  ordered planner points. They inspect the preserved dirty `mobile/App.tsx`
+  changes; no Task 4 commit touches `mobile/App.tsx`.
+- Typecheck command: `npm.cmd run typecheck` — **BLOCKED** by the existing
+  working-copy error `mobile/App.tsx(1647,27): error TS2304: Cannot find name
+  'simplifyCoordinatesForRouting'`. The dirty App file removed that import;
+  the pre-edit committed version retains it. `mobile/App.tsx` is outside the
+  Task 4 ownership boundary and was not changed.
+- Diff checks: `git diff --check` and the owned-file `git diff --check` both
+  exited 0. Git emitted only LF/CRLF normalization warnings; no whitespace
+  errors were reported.
+- Browser check: the task-owned Expo web server ran from this exact worktree
+  on port 8092 (PID 9992 verified by command line), then was stopped and the
+  port rechecked with no listener remaining. At an explicit `390x844` viewport,
+  Arabic RTL settings, route chooser, recording-only setup, and the
+  foreground-only permission explanation were visible. The recording-only
+  screen stated that route progress is not shown; Start opened the explanation
+  without a browser location request, and Cancel returned without granting
+  access. The viewport was reset and the user browser tab was left in English
+  with location still Not requested. No native-runtime claim was made.
+- The browser emitted two existing React Native web warnings, both
+  `Unexpected text node: . A text node cannot be a child of a <View>.`; their
+  source was not attributable to the owned Task 4 files during this check and
+  remains a follow-up concern.
+
+## Terminal status and resume
+
+Task 4 product work is complete within the stated ownership boundary, but the
+release continuation is **BLOCKED** until the preserved dirty Task 2/App
+integration changes are reconciled by their owner (or explicitly authorized
+for this task). Do not edit or discard those files as part of this checkpoint.
+
+Resume step: preserve the six implementation commits above, reconcile the
+missing `simplifyCoordinatesForRouting` import and the three App integration
+source-shape expectations outside this scope, rerun `npm.cmd test` and
+`npm.cmd run typecheck`, then repeat the `390x844` Arabic RTL browser pass and
+change this checkpoint to COMPLETE only if those checks are green. The final
+report is `.superpowers/sdd/2026-09-12-release-continuation/task-4-report.md`.
