@@ -203,6 +203,89 @@ export function applyManualSketchDecision(
   return { ...result, status: 'done', decision };
 }
 
+export type ManualStroke = Coordinate[];
+export type ManualSketchState = {
+  strokes: ManualStroke[];
+  redo: ManualStroke[];
+};
+
+export function createManualSketchState(
+  strokes: readonly Coordinate[][] = [],
+): ManualSketchState {
+  return {
+    strokes: strokes
+      .map((stroke) => normalizeCoordinates(stroke))
+      .filter((stroke) => stroke.length > 0),
+    redo: [],
+  };
+}
+
+export function appendManualStroke(
+  state: ManualSketchState,
+  stroke: readonly Coordinate[],
+): ManualSketchState {
+  const points = normalizeCoordinates([...stroke]);
+  if (!points.length) return cloneManualSketchState(state);
+  return {
+    strokes: [...state.strokes.map((item) => [...item]), points],
+    redo: [],
+  };
+}
+
+export function undoManualStroke(state: ManualSketchState): ManualSketchState {
+  if (!state.strokes.length) return cloneManualSketchState(state);
+  const strokes = state.strokes.map((stroke) => [...stroke]);
+  const removed = strokes.pop();
+  return {
+    strokes,
+    redo: removed
+      ? [...state.redo.map((stroke) => [...stroke]), removed]
+      : state.redo.map((stroke) => [...stroke]),
+  };
+}
+
+export function redoManualStroke(state: ManualSketchState): ManualSketchState {
+  if (!state.redo.length) return cloneManualSketchState(state);
+  const redo = state.redo.map((stroke) => [...stroke]);
+  const restored = redo.pop();
+  return {
+    strokes: restored
+      ? [...state.strokes.map((stroke) => [...stroke]), restored]
+      : state.strokes.map((stroke) => [...stroke]),
+    redo,
+  };
+}
+
+export function clearManualSketch(state: ManualSketchState): ManualSketchState {
+  return {
+    strokes: [],
+    redo: state.strokes.map((stroke) => [...stroke]).reverse(),
+  };
+}
+
+export function manualSketchCoordinates(state: ManualSketchState): Coordinate[] {
+  return normalizeCoordinates(state.strokes.flatMap((stroke) => stroke));
+}
+
+/** Cap a freehand request for routing while preserving the user-visible ends. */
+export function simplifyCoordinatesForRouting(
+  coordinates: Coordinate[],
+  maxPoints = 25,
+): Coordinate[] {
+  const normalized = normalizeCoordinates(coordinates);
+  const limit = Math.max(2, Math.floor(maxPoints));
+  if (normalized.length <= limit) return normalized;
+  const simplified = simplifyCoordinates(normalized, 0.000035);
+  if (simplified.length <= limit) return simplified;
+  const stride = Math.ceil((simplified.length - 1) / (limit - 1));
+  return simplified.filter(
+    (_, index) =>
+      index === 0 ||
+      index === simplified.length - 1 ||
+      index % stride === 0,
+  );
+}
+
 export type LoopGenerationFailure = 'invalidTarget' | 'outsideCoverage' | 'matchingFailed' | 'unknown';
 export type LoopGenerationRecovery = {
   failure: LoopGenerationFailure;
@@ -262,7 +345,16 @@ function buildRoutePlan(id: string, name: string, validCoordinates: Coordinate[]
 export function draftRouteFromCoordinates(id: string, name: string, coordinates: Coordinate[], source = 'Drawn on device'): RoutePlan | null {
   const validCoordinates = normalizeCoordinates(coordinates);
   if (!validCoordinates.length) return null;
-  return buildRoutePlan(id, name, validCoordinates, source);
+  const draft = buildRoutePlan(id, name, validCoordinates, source);
+  return {
+    ...draft,
+    geometryKind: 'waypoint_trace',
+    geometryStatus: 'draft',
+    origin: 'drawn',
+    ownership: 'personal',
+    provisionalDistanceKm: draft.distanceKm,
+    distanceStatus: 'provisional',
+  };
 }
 
 export function parseGpx(gpx: string) {
@@ -290,6 +382,45 @@ export function parseGpxDetailed(gpx: string) {
 function isValidCoordinate(coordinate: Coordinate) { return Number.isFinite(coordinate.latitude) && Number.isFinite(coordinate.longitude) && coordinate.latitude >= -90 && coordinate.latitude <= 90 && coordinate.longitude >= -180 && coordinate.longitude <= 180; }
 function normalizeCoordinates(coordinates: Coordinate[]): Coordinate[] {
   return coordinates.filter(isValidCoordinate).filter((coordinate, index, all) => index === 0 || coordinate.latitude !== all[index - 1].latitude || coordinate.longitude !== all[index - 1].longitude);
+}
+
+function cloneManualSketchState(state: ManualSketchState): ManualSketchState {
+  return {
+    strokes: state.strokes.map((stroke) => [...stroke]),
+    redo: state.redo.map((stroke) => [...stroke]),
+  };
+}
+
+function simplifyCoordinates(points: Coordinate[], tolerance: number): Coordinate[] {
+  if (points.length <= 2) return points;
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  while (stack.length) {
+    const [start, end] = stack.pop()!;
+    let maximum = tolerance;
+    let index = -1;
+    for (let cursor = start + 1; cursor < end; cursor += 1) {
+      const distance = perpendicularDistance(points[cursor], points[start], points[end]);
+      if (distance > maximum) {
+        maximum = distance;
+        index = cursor;
+      }
+    }
+    if (index >= 0) {
+      keep[index] = 1;
+      stack.push([start, index], [index, end]);
+    }
+  }
+  return points.filter((_, index) => keep[index] === 1);
+}
+
+function perpendicularDistance(point: Coordinate, start: Coordinate, end: Coordinate) {
+  const dx = end.longitude - start.longitude;
+  const dy = end.latitude - start.latitude;
+  if (dx === 0 && dy === 0) return Math.hypot(point.longitude - start.longitude, point.latitude - start.latitude);
+  return Math.abs(dy * point.longitude - dx * point.latitude + end.longitude * start.latitude - end.latitude * start.longitude) / Math.hypot(dx, dy);
 }
 function isBahrainCoordinate(coordinate: Coordinate) { return coordinate.latitude >= BAHRAIN_BOUNDS.minLatitude && coordinate.latitude <= BAHRAIN_BOUNDS.maxLatitude && coordinate.longitude >= BAHRAIN_BOUNDS.minLongitude && coordinate.longitude <= BAHRAIN_BOUNDS.maxLongitude; }
 

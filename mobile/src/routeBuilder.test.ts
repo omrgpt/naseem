@@ -129,6 +129,8 @@ test('manual Done retains every sketch point and decisions do not silently lose 
   assert.equal(applyManualSketchDecision(done, 'edit').status, 'editing');
   assert.equal(applyManualSketchDecision(done, 'discard').route, null);
   assert.deepEqual(applyManualSketchDecision(done, 'discard').points, []);
+  assert.equal(done.route?.geometryKind, 'waypoint_trace');
+  assert.equal(done.route?.geometryStatus, 'draft');
 });
 
 test('loop matching failure returns deterministic retry and edit recovery without losing Start', () => {
@@ -138,4 +140,41 @@ test('loop matching failure returns deterministic retry and edit recovery withou
   assert.equal(recovery.preservesStart, true);
   assert.equal(recovery.start, start);
   assert.equal(recovery.failure, 'matchingFailed');
+});
+
+test('freehand routing payload preserves endpoints while simplifying only the payload', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.simplifyCoordinatesForRouting, 'function');
+  const points = Array.from({ length: 60 }, (_, index) => ({
+    latitude: 26.1 + index * 0.001,
+    longitude: 50.5 + Math.sin(index / 2) * 0.001,
+  }));
+  const simplified = builder.simplifyCoordinatesForRouting(points, 12);
+
+  assert.ok(simplified.length <= 12);
+  assert.deepEqual(simplified[0], points[0]);
+  assert.deepEqual(simplified.at(-1), points.at(-1));
+  assert.equal(points.length, 60);
+});
+
+test('undo and redo operate on complete manual strokes', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.createManualSketchState, 'function');
+  const firstStroke = [
+    { latitude: 26.24, longitude: 50.53 },
+    { latitude: 26.23, longitude: 50.54 },
+  ];
+  const secondStroke = [
+    { latitude: 26.22, longitude: 50.55 },
+    { latitude: 26.21, longitude: 50.56 },
+  ];
+  let state = builder.createManualSketchState();
+  state = builder.appendManualStroke(state, firstStroke);
+  state = builder.appendManualStroke(state, secondStroke);
+  assert.deepEqual(builder.manualSketchCoordinates(state), [...firstStroke, ...secondStroke]);
+
+  state = builder.undoManualStroke(state);
+  assert.deepEqual(builder.manualSketchCoordinates(state), firstStroke);
+  state = builder.redoManualStroke(state);
+  assert.deepEqual(builder.manualSketchCoordinates(state), [...firstStroke, ...secondStroke]);
 });

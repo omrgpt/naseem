@@ -6,6 +6,10 @@ import test from "node:test";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const appSource = readFileSync(join(sourceDirectory, "..", "App.tsx"), "utf8");
+const routesScreenSource = readFileSync(
+  join(sourceDirectory, "screens", "RoutesScreen.tsx"),
+  "utf8",
+);
 
 function sourceBetween(start: string, end: string) {
   const startIndex = appSource.indexOf(start);
@@ -252,4 +256,65 @@ test("normal scroll content clears the bottom tab bar without changing map surfa
   assert.match(appSource, /contentContainerStyle=\{shellStyles\.content\}/);
   assert.match(appSource, /const ownsMapViewport = Boolean\([\s\S]*detailRouteId/);
   assert.match(appSource, /<View style=\{shellStyles\.surface\}>\{content\}<\/View>/);
+});
+
+test("endpoint editing uses the real map with an active crosshair and explicit confirmation", () => {
+  assert.doesNotMatch(routesScreenSource, /EmptyBuilderMap/);
+  assert.match(routesScreenSource, /draftRouteFromCoordinates/);
+  assert.match(routesScreenSource, /activeEndpoint=\{mapPickerField\}/);
+  assert.match(routesScreenSource, /Selected point:/);
+  assert.match(routesScreenSource, /Confirm \$\{pendingMapPoint\.field/);
+});
+
+test("manual sketches stay explicit drafts until the rider checks mapped roads", () => {
+  assert.match(appSource, /manualMatchStatus/);
+  assert.match(appSource, /const checkManualRoads = async/);
+  const checkManualRoads = sourceBetween(
+    "const checkManualRoads = async",
+    "const useManualRoute =",
+  );
+  assert.match(checkManualRoads, /simplifyCoordinatesForRouting/);
+  assert.match(checkManualRoads, /beginRouteMatching\(draftRecord\)/);
+  assert.match(checkManualRoads, /routeMatchingSucceeded/);
+  assert.match(checkManualRoads, /routeMatchingFailed/);
+  assert.match(routesScreenSource, /Check against mapped roads/);
+  assert.match(routesScreenSource, /تحقق من الطرق المرسومة/);
+  assert.match(routesScreenSource, /manualMatchStatus/);
+  assert.match(appSource, /onCheckManualRoads=\{checkManualRoads\}/);
+});
+
+test("manual decisions never promote an unchecked sketch to ready road geometry", () => {
+  const manualDraft = sourceBetween(
+    "const manualDraftRecord =",
+    "const manualRoute =",
+  );
+  const manualRecord = sourceBetween(
+    "const manualRecordForDecision",
+    "const useManualRoute =",
+  );
+  assert.match(
+    manualDraft,
+    /geometry: \{ kind: "waypoint_trace", status: "draft" \}/,
+  );
+  assert.match(manualRecord, /manualDraftRecord/);
+  assert.doesNotMatch(
+    `${manualDraft}\n${manualRecord}`,
+    /kind: "recorded_trace"[\s\S]*status: "ready"/,
+  );
+});
+
+test("Add stop and Edit retain committed intermediate planner points", () => {
+  assert.match(appSource, /const \[plannerPoints, setPlannerPoints\]/);
+  const matchPlanner = sourceBetween(
+    "const matchPlanner =",
+    "const choosePlannerPoint =",
+  );
+  assert.match(matchPlanner, /points/);
+  assert.match(matchPlanner, /routeFromCoordinates\([\s\S]*orderedPoints/);
+  const editRoutePoints = sourceBetween(
+    "const editRoutePoints =",
+    "const detailRetry =",
+  );
+  assert.match(editRoutePoints, /record\.points\s*\.slice\(1, -1\)/);
+  assert.match(routesScreenSource, /plannerStops/);
 });

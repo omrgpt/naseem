@@ -1,10 +1,11 @@
-import { useRef, useState, type RefObject } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { MapPreview } from "../MapPreview";
 import { RouteLayerLegend } from "../RouteLayerLegend";
 import { NoticeAlert, StatusBadge } from "../UiPatterns";
 import type { Coordinate, RoutePlan } from "../domain";
 import {
+  draftRouteFromCoordinates,
   plannerValidationMessage,
   validatePlannerEndpoints,
   type PlannerField,
@@ -47,6 +48,8 @@ export type RoutesMapText = {
 export type RoutesScreenProps = ScreenBaseProps & {
   builder: BuilderRouteState;
   builderPreview: RoutePlan | null;
+  plannerStops?: PlannerPoint[];
+  addingStop?: boolean;
   activeField: "start" | "destination" | null;
   startText: string;
   destinationText: string;
@@ -60,6 +63,8 @@ export type RoutesScreenProps = ScreenBaseProps & {
   manualMode: boolean;
   manualRoute: RoutePlan | null;
   manualPoints: Coordinate[];
+  manualMatchStatus?: "draft" | "matching" | "ready" | "failed";
+  manualMatchError?: string;
   importReview: RoutePlan | null;
   importReviewFileName?: string;
   generatedReview: RoutePlan | null;
@@ -97,6 +102,7 @@ export type RoutesScreenProps = ScreenBaseProps & {
   onDiscardManual?: () => void;
   onRemoveManualPoint: (index: number) => void;
   onMoveManualPoint?: (index: number, direction: -1 | 1) => void;
+  onCheckManualRoads?: () => void;
   onUseImport: () => void;
   onCancelImport: () => void;
   onUseGenerated: () => void;
@@ -115,6 +121,8 @@ export function RoutesScreen({
   distanceDisplay,
   builder,
   builderPreview,
+  plannerStops = [],
+  addingStop = false,
   activeField,
   startText,
   destinationText,
@@ -128,6 +136,8 @@ export function RoutesScreen({
   manualMode,
   manualRoute,
   manualPoints,
+  manualMatchStatus = "draft",
+  manualMatchError,
   importReview,
   importReviewFileName,
   generatedReview,
@@ -162,6 +172,7 @@ export function RoutesScreen({
   onDiscardManual,
   onRemoveManualPoint,
   onMoveManualPoint,
+  onCheckManualRoads,
   onUseImport,
   onCancelImport,
   onUseGenerated,
@@ -186,12 +197,41 @@ export function RoutesScreen({
   >("pending");
   const destinationRef = useRef<TextInput>(null);
   const preview = manualMode ? manualRoute : builderPreview;
+  const editorMapRoute = useMemo(() => {
+    const points = [
+      ...(builder.start ? [builder.start] : []),
+      ...plannerStops,
+      ...(builder.destination ? [builder.destination] : []),
+    ];
+    return draftRouteFromCoordinates(
+      "planner-editor-map",
+      rtl ? "محدد المسار" : "Route picker",
+      points.length
+        ? points
+        : [{ latitude: 26.18, longitude: 50.53 }],
+      rtl ? "محدد الخريطة" : "Map picker",
+    );
+  }, [builder.destination, builder.start, plannerStops, rtl]);
+  const manualMapRoute =
+    manualRoute ??
+    draftRouteFromCoordinates(
+      "manual-sketch-map",
+      rtl ? "رسم المسار" : "Route sketch",
+      manualPoints.length
+        ? manualPoints
+        : [{ latitude: 26.18, longitude: 50.53 }],
+      rtl ? "رسم على الخريطة" : "Drawn on device",
+    );
   const retainedManualRoute =
     manualReview ??
     completedManualRoute ??
     (!manualMode && manualRoute && manualPoints.length >= 2 ? manualRoute : null);
   const mapStatus = manualMode
-    ? "pilot"
+    ? manualMatchStatus === "matching"
+      ? "loading"
+      : manualMatchStatus === "ready"
+        ? "matched"
+        : "pilot"
     : builder.status === "matching"
       ? "loading"
       : builder.status === "ready"
@@ -230,6 +270,17 @@ export function RoutesScreen({
     activeField && !isEndpointCommitted(activeField) ? activeField : null;
   const mapPickerField =
     activeField ?? (builder.start ? ("destination" as const) : ("start" as const));
+  const pendingMapPointLabel = addingStop
+    ? rtl
+      ? "التوقف"
+      : "Stop"
+    : pendingMapPoint?.field === "start"
+      ? rtl
+        ? "البداية"
+        : "Start"
+      : rtl
+        ? "الوجهة"
+        : "Destination";
   const formatCoordinate = (value: number) =>
     formatNumber
       ? formatNumber(value, {
@@ -350,28 +401,28 @@ export function RoutesScreen({
         style={[styles.screen, styles.manualScreen, rtl && styles.screenRtl]}
       >
         <View style={styles.manualMapViewport}>
-          {preview ? (
+          {manualMapRoute ? (
             <MapPreview
-              route={asCanonicalRoute(preview)!}
+              route={asCanonicalRoute(manualMapRoute)!}
               fullScreen
               rtl={rtl}
               onMapPress={handleMapPress}
               roadLabels={roadLabels}
               mapText={{
                 ...mapText,
-                mapLabel: previewMapLabel,
+                mapLabel: manualMapRoute
+                  ? rtl
+                    ? `${manualMapRoute.name} · ${tx(t, "route", "route")}`
+                    : `${manualMapRoute.name} route map`
+                  : undefined,
                 status: mapStatus,
-                statusPilot: tx(t, "straightLine", "Straight line"),
+                statusPilot:
+                  manualMatchStatus === "failed"
+                    ? tx(t, "routeUnavailable", "Road match unavailable")
+                    : tx(t, "straightLine", "Straight line"),
               }}
             />
-          ) : (
-            <EmptyBuilderMap
-              palette={palette}
-              t={t}
-              rtl={rtl}
-              onMapPress={handleMapPress}
-            />
-          )}
+          ) : null}
         </View>
         <ScrollView
           style={styles.manualControlTray}
@@ -392,6 +443,9 @@ export function RoutesScreen({
             onCancel={cancelManual}
             onRemove={onRemoveManualPoint}
             onMove={onMoveManualPoint}
+            manualMatchStatus={manualMatchStatus}
+            manualMatchError={manualMatchError}
+            onCheckRoads={onCheckManualRoads}
           />
         </ScrollView>
       </View>
@@ -525,6 +579,28 @@ export function RoutesScreen({
             field={suggestionsField}
             onUse={handleSavedPoint}
           />
+          {plannerStops.length > 0 && (
+            <View style={styles.field} testID="planner-stops">
+              <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
+                {rtl ? "توقفات المسار" : "Route stops"}
+              </Text>
+              {plannerStops.map((point, index) => (
+                <Text
+                  key={`${point.latitude}-${point.longitude}-${index}`}
+                  style={[styles.fieldHint, rtl && styles.textRight]}
+                >
+                  {index + 1}. {rtl && point.nameAr ? point.nameAr : point.name}
+                </Text>
+              ))}
+            </View>
+          )}
+          {addingStop && (
+            <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+              {rtl
+                ? "اضغط على الخريطة لإضافة التوقف، ثم أكّد النقطة المحددة."
+                : "Tap the map to add a stop, then confirm the selected point."}
+            </Text>
+          )}
           {!manualMode && (
             <View style={styles.statusLine} accessibilityLiveRegion="polite">
               <View
@@ -544,11 +620,11 @@ export function RoutesScreen({
       )}
 
       {pendingMapPoint && (
-        <View style={styles.panelAlt}>
+        <View style={styles.panelAlt} testID="map-point-confirmation">
           <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
             {rtl
-              ? `سيغيّر محدد الخريطة ${pendingMapPoint.field === "start" ? "البداية" : "الوجهة"} فقط`
-              : `Map picker changes ${pendingMapPoint.field === "start" ? "Start" : "Destination"} only`}
+              ? `سيغيّر محدد الخريطة ${pendingMapPointLabel} فقط`
+              : `Map picker changes ${pendingMapPointLabel} only`}
           </Text>
           <Text style={[styles.fieldHint, rtl && styles.textRight]}>
             {rtl ? "النقطة المحددة:" : "Selected point:"}{" "}
@@ -557,14 +633,19 @@ export function RoutesScreen({
           </Text>
           <View style={[styles.manualActions, rtl && styles.rowRtl]}>
             <Pressable
+              testID="confirm-map-point"
               accessibilityRole="button"
               onPress={confirmMapPoint}
               style={styles.primary}
             >
               <Text style={styles.primaryText}>
-                {rtl
-                  ? `تأكيد ${pendingMapPoint.field === "start" ? "البداية" : "الوجهة"}`
-                  : `Confirm ${pendingMapPoint.field === "start" ? "Start" : "Destination"}`}
+                {addingStop
+                  ? rtl
+                    ? "تأكيد التوقف"
+                    : "Confirm Stop"
+                  : rtl
+                    ? `تأكيد ${pendingMapPoint.field === "start" ? "البداية" : "الوجهة"}`
+                    : `Confirm ${pendingMapPoint.field === "start" ? "Start" : "Destination"}`}
               </Text>
             </Pressable>
             <Pressable
@@ -587,31 +668,22 @@ export function RoutesScreen({
         />
       )}
 
-      {hasPlanningWork &&
-        (preview ? (
-          <MapPreview
-            route={asCanonicalRoute(preview)!}
-            fullScreen
-            rtl={rtl}
-            onMapPress={handleMapPress}
-            roadLabels={roadLabels}
-            mapText={{
-              ...mapText,
-              mapLabel: previewMapLabel,
-              status: mapStatus,
-              statusPilot: manualMode
-                ? tx(t, "straightLine", "Straight line")
-                : mapText.statusPilot,
-            }}
-          />
-        ) : (
-          <EmptyBuilderMap
-            palette={palette}
-            t={t}
-            rtl={rtl}
-            onMapPress={handleMapPress}
-          />
-        ))}
+      {hasPlanningWork && (
+        <MapPreview
+          route={asCanonicalRoute(preview ?? editorMapRoute)!}
+          fullScreen
+          rtl={rtl}
+          onMapPress={handleMapPress}
+          activeEndpoint={mapPickerField}
+          roadLabels={roadLabels}
+          mapText={{
+            ...mapText,
+            mapLabel: previewMapLabel,
+            status: mapStatus,
+            statusPilot: mapText.statusPilot,
+          }}
+        />
+      )}
 
       {hasPlanningWork && !manualMode && builder.status === "failed" && (
         <NoticeAlert
@@ -731,6 +803,9 @@ export function RoutesScreen({
           formatNumber={formatNumber}
           distanceDisplay={distanceDisplay}
           decision={manualDecision}
+          manualMatchStatus={manualMatchStatus}
+          manualMatchError={manualMatchError}
+          onCheckRoads={onCheckManualRoads}
           onUse={() => decideManual("use")}
           onSave={() => decideManual("save")}
           onEdit={editManual}
@@ -753,6 +828,9 @@ export function RoutesScreen({
             onCancel={cancelManual}
             onRemove={onRemoveManualPoint}
             onMove={onMoveManualPoint}
+            manualMatchStatus={manualMatchStatus}
+            manualMatchError={manualMatchError}
+            onCheckRoads={onCheckManualRoads}
           />
         ) : (
           <View style={styles.panelAlt}>
@@ -988,6 +1066,9 @@ function ManualSketchReviewPanel({
   formatNumber,
   distanceDisplay,
   decision,
+  manualMatchStatus,
+  manualMatchError,
+  onCheckRoads,
   onUse,
   onSave,
   onEdit,
@@ -1000,6 +1081,9 @@ function ManualSketchReviewPanel({
   formatNumber?: ScreenBaseProps["formatNumber"];
   distanceDisplay: ScreenBaseProps["distanceDisplay"];
   decision: "pending" | "use" | "save" | "edit";
+  manualMatchStatus: "draft" | "matching" | "ready" | "failed";
+  manualMatchError?: string;
+  onCheckRoads?: () => void;
   onUse: () => void;
   onSave: () => void;
   onEdit: () => void;
@@ -1008,18 +1092,71 @@ function ManualSketchReviewPanel({
   const pointCount = formatNumber
     ? formatNumber(route.points.length, { maximumFractionDigits: 0 })
     : String(route.points.length);
+  const roadCheckLabel =
+    manualMatchStatus === "matching"
+      ? rtl
+        ? "جارٍ التحقق من الطرق…"
+        : "Checking mapped roads…"
+      : manualMatchStatus === "ready"
+        ? rtl
+          ? "تم التحقق من الطرق"
+          : "Mapped roads checked"
+        : rtl
+          ? "تحقق من الطرق المرسومة"
+          : tx(t, "checkManualRoads", "Check against mapped roads");
+  const sketchCopy =
+    manualMatchStatus === "ready"
+      ? rtl
+        ? "تم التحقق من الرسم مقابل الطرق المرسومة؛ وسيبقى الاستخدام خطة غير ملاحية."
+        : "This sketch was checked against mapped roads; Use remains a non-navigation plan."
+      : manualMatchStatus === "matching"
+        ? rtl
+          ? "جارٍ التحقق من الرسم مقابل الطرق؛ تبقى النقاط قابلة للتعديل."
+          : "Checking this sketch against mapped roads; points stay editable."
+        : tx(
+            t,
+            "straightLineWarning",
+            "This plan follows straight lines between points. It is not navigation guidance.",
+          );
   return (
     <View style={styles.panelAlt}>
       <Text style={[styles.sectionTitle, rtl && styles.textRight]}>
         {rtl ? "رسم المسار جاهز" : "Route sketch ready"}
       </Text>
       <Text style={[styles.fieldHint, rtl && styles.textRight]}>
-        {tx(
-          t,
-          "straightLineWarning",
-          "This plan follows straight lines between points. It is not navigation guidance.",
-        )}
+        {sketchCopy}
       </Text>
+      <Pressable
+        testID="check-manual-roads-review"
+        accessibilityRole="button"
+        disabled={!onCheckRoads || route.points.length < 2 || manualMatchStatus === "matching"}
+        accessibilityState={{
+          disabled:
+            !onCheckRoads ||
+            route.points.length < 2 ||
+            manualMatchStatus === "matching",
+        }}
+        onPress={onCheckRoads}
+        style={[
+          styles.secondary,
+          (!onCheckRoads || route.points.length < 2 || manualMatchStatus === "matching") &&
+            styles.disabled,
+        ]}
+      >
+        <Text style={styles.secondaryText}>{roadCheckLabel}</Text>
+      </Pressable>
+      {manualMatchStatus === "ready" && (
+        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+          {rtl
+            ? "تم الاحتفاظ بإثبات الطريق كمسار صالح للمراجعة."
+            : "The road-matched result is retained for review."}
+        </Text>
+      )}
+      {manualMatchStatus === "failed" && manualMatchError && (
+        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+          {manualMatchError}
+        </Text>
+      )}
       <View style={[styles.metricRail, rtl && styles.rowRtl]}>
         <Metric
           label={tx(t, "points", "Points")}
@@ -1418,95 +1555,6 @@ function SavedPointChoices({
   );
 }
 
-function EmptyBuilderMap({
-  palette,
-  t,
-  rtl,
-  onMapPress,
-}: {
-  palette: ScreenBaseProps["palette"];
-  t: Copy;
-  rtl: boolean;
-  onMapPress: (coordinate: Coordinate) => void;
-}) {
-  const [size, setSize] = useState({ width: 320, height: 248 });
-  const choosePoint = (event?: any) => {
-    const native = event?.nativeEvent ?? {};
-    const x = Number(native.locationX);
-    const y = Number(native.locationY);
-    const normalizedX = Number.isFinite(x)
-      ? Math.max(0, Math.min(1, x / size.width))
-      : 0.5;
-    const normalizedY = Number.isFinite(y)
-      ? Math.max(0, Math.min(1, y / size.height))
-      : 0.5;
-    // This surface is only a point picker until the real map has a route to
-    // render. Taps are translated within the Bahrain viewport; no route line
-    // or road claim is inferred from this coordinate.
-    onMapPress({
-      latitude: 26.3 - normalizedY * 0.24,
-      longitude: 50.38 + normalizedX * 0.3,
-    });
-  };
-  const onKeyDown = (event: any) => {
-    if (
-      event?.key === "Enter" ||
-      event?.key === " " ||
-      event?.key === "Spacebar"
-    ) {
-      event.preventDefault?.();
-      choosePoint();
-    }
-  };
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={tx(t, "chooseOnMap", "Choose a point on the map")}
-      accessibilityHint={tx(
-        t,
-        "addPointHint",
-        "Adds a point at the map center.",
-      )}
-      onPress={choosePoint}
-      onLayout={(event) => {
-        const { width, height } = event.nativeEvent.layout;
-        if (width > 0 && height > 0) setSize({ width, height });
-      }}
-      style={{
-        height: 248,
-        borderRadius: 18,
-        backgroundColor: palette.panelAlt,
-        borderColor: palette.line,
-        borderWidth: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 22,
-      }}
-      {...({
-        onKeyDown,
-        tabIndex: 0,
-        "aria-keyshortcuts": "Enter Space",
-      } as any)}
-    >
-      <Text
-        style={{
-          color: palette.muted,
-          fontFamily: rtl ? "NotoSansArabic_400Regular" : "Manrope_400Regular",
-          fontSize: 13,
-          lineHeight: 20,
-          textAlign: "center",
-        }}
-      >
-        {tx(
-          t,
-          "chooseOnMapCopy",
-          "Tap where you want to place this point. You can also choose it from the fields.",
-        )}
-      </Text>
-    </Pressable>
-  );
-}
-
 function RouteReadyPanel({
   route,
   t,
@@ -1749,6 +1797,9 @@ function ManualPanel({
   onCancel,
   onRemove,
   onMove,
+  manualMatchStatus,
+  manualMatchError,
+  onCheckRoads,
 }: {
   t: Copy;
   rtl: boolean;
@@ -1762,6 +1813,9 @@ function ManualPanel({
   onCancel: () => void;
   onRemove: (index: number) => void;
   onMove?: (index: number, direction: -1 | 1) => void;
+  manualMatchStatus: "draft" | "matching" | "ready" | "failed";
+  manualMatchError?: string;
+  onCheckRoads?: () => void;
 }) {
   const coordinateText = (value: number) =>
     formatNumber
@@ -1778,21 +1832,74 @@ function ManualPanel({
     formatNumber
       ? formatNumber(index + 1, { maximumFractionDigits: 0 })
       : String(index + 1);
+  const roadCheckLabel =
+    manualMatchStatus === "matching"
+      ? rtl
+        ? "جارٍ التحقق من الطرق…"
+        : "Checking mapped roads…"
+      : manualMatchStatus === "ready"
+        ? rtl
+          ? "تم التحقق من الطرق"
+          : "Mapped roads checked"
+        : rtl
+          ? "تحقق من الطرق المرسومة"
+          : tx(t, "checkManualRoads", "Check against mapped roads");
+  const sketchCopy =
+    manualMatchStatus === "ready"
+      ? rtl
+        ? "تم التحقق من الرسم مقابل الطرق المرسومة؛ وسيبقى الاستخدام خطة غير ملاحية."
+        : "This sketch was checked against mapped roads; Use remains a non-navigation plan."
+      : manualMatchStatus === "matching"
+        ? rtl
+          ? "جارٍ التحقق من الرسم مقابل الطرق؛ تبقى النقاط قابلة للتعديل."
+          : "Checking this sketch against mapped roads; points stay editable."
+        : tx(
+            t,
+            "straightLineWarning",
+            "This is a planning sketch. It will not follow roads or provide navigation guidance.",
+          );
   return (
     <View style={styles.manual}>
       <Text style={[styles.manualTitle, rtl && styles.textRight]}>
         {tx(t, "drawRouteSketch", "Draw a route sketch")}
       </Text>
       <Text style={[styles.fieldHint, rtl && styles.textRight]}>
-        {tx(
-          t,
-          "straightLineWarning",
-          "This is a planning sketch. It will not follow roads or provide navigation guidance.",
-        )}
+        {sketchCopy}
       </Text>
       <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
         {pointCount} {tx(t, "pointsAdded", "points added")}
       </Text>
+      <Pressable
+        testID="check-manual-roads"
+        accessibilityRole="button"
+        disabled={!onCheckRoads || points.length < 2 || manualMatchStatus === "matching"}
+        accessibilityState={{
+          disabled:
+            !onCheckRoads ||
+            points.length < 2 ||
+            manualMatchStatus === "matching",
+        }}
+        onPress={onCheckRoads}
+        style={[
+          styles.secondary,
+          (!onCheckRoads || points.length < 2 || manualMatchStatus === "matching") &&
+            styles.disabled,
+        ]}
+      >
+        <Text style={styles.secondaryText}>{roadCheckLabel}</Text>
+      </Pressable>
+      {manualMatchStatus === "ready" && (
+        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+          {rtl
+            ? "تم التحقق من مطابقة المسار للطرق."
+            : "Road check complete; the matched result is retained."}
+        </Text>
+      )}
+      {manualMatchStatus === "failed" && manualMatchError && (
+        <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+          {manualMatchError}
+        </Text>
+      )}
       <View style={[styles.manualActions, rtl && styles.rowRtl]}>
         <Pressable
           accessibilityRole="button"
