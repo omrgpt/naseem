@@ -170,10 +170,15 @@ export function useLiveRideSession({
   formatAccuracy = (value) => `${Math.round(value)} m`,
   onPosition,
 }: LiveRideSessionOptions): LiveRideSession {
-  const formatDuration =
-    customFormatDuration ??
-    ((value: number) =>
-      `${value} ${/[\u0600-\u06ff]/.test(Object.values(messages ?? {}).join(" ")) ? "دقيقة" : "min"}`);
+  const isArabicCopy = /[\u0600-\u06ff]/.test(
+    Object.values(messages ?? {}).join(" "),
+  );
+  const formatDuration = useMemo(
+    () =>
+      customFormatDuration ??
+      ((value: number) => `${value} ${isArabicCopy ? "دقيقة" : "min"}`),
+    [customFormatDuration, isArabicCopy],
+  );
   const waitingMessage = messages?.waiting ?? "Waiting for you to start.";
   const permissionStartMessage =
     messages?.permissionStart ??
