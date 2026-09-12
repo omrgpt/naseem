@@ -1,6 +1,6 @@
 # Task 1 — Parent-driven map and decision-sheet safe areas
 
-Status: IN PROGRESS
+Status: COMPLETE
 
 - Worktree: `C:\Users\PC\Documents\ChatGPT\Bike\.worktrees\naseem-release-fixes`
 - Branch: `codex/naseem-release-fixes`
@@ -37,7 +37,7 @@ Status: IN PROGRESS
 - Expected failures: the three new available-rectangle, obstruction-safe-zone,
   and phone/desktop layout tests reported the production helpers as undefined.
 
-## Resume step
+## Initial resume step (completed)
 
 Implement the pure contract/layout helpers, then wire the measured web map and
 Route Detail composition without touching route readiness or geometry logic.
@@ -63,3 +63,45 @@ Route Detail composition without touching route readiness or geometry logic.
   attribution sits in the same bottom-right band as the zoom controls.
 - Next step: place attribution on the inline-start edge, opposite the
   direction-aware controls, then repeat viewport and terminal verification.
+
+## Completion record
+
+- Implementation commit: `becaff3`
+- Exact changed product/test files:
+  - `mobile/src/MapPreview.web.tsx`
+  - `mobile/src/MapPreview.tsx`
+  - `mobile/src/mapPreviewContract.ts`
+  - `mobile/src/screens/RouteDetailScreen.tsx`
+  - `mobile/src/screenStyles.ts`
+  - `mobile/src/mapPreviewContract.test.ts`
+- Allowed file inspected but unchanged: `mobile/src/mapModel.test.ts`
+- Required report: `.superpowers/sdd/2026-09-12-release-continuation/task-1-report.md`
+- Checkpoint file: `docs/superpowers/checkpoints/task-1-map-safe-area.md`
+- Focused GREEN: `npm.cmd test -- src/mapPreviewContract.test.ts src/mapModel.test.ts` — 242/242 passed.
+- Full mobile suite: `npm.cmd test` — 242/242 passed.
+- Typecheck: `npm.cmd run typecheck` — passed with no diagnostics.
+- Diff check: `git diff --check` — passed; only existing LF/CRLF warnings.
+
+### Required viewport checks
+
+- `390x844`: PASS — map stayed in the viewport; 27.2px sheet overlap was
+  bounded; controls cleared the top actions and sheet; attribution cleared
+  controls; no document overflow.
+- `320x568`: PASS — Fit/+/− occupied `y=134.2..280.2`, below the top actions
+  and above the sheet at `y=289`; attribution cleared controls; no overflow.
+- `1280x720`: PASS — desktop map and decision panel were horizontally split
+  with a 16px gap; controls and attribution stayed within the map; no overflow.
+- `1536x864`: PASS — desktop map and decision panel were horizontally split
+  with a 16px gap; controls and attribution stayed within the map; no overflow.
+
+## Concerns
+
+- Native iOS/Android runtime behavior, device safe-area reporting, and native
+  map interaction still require a physical device or emulator; no native
+  runtime success is claimed.
+
+## Next resume step
+
+No further Task 1 implementation remains. If resumed, re-read this checkpoint
+and proceed with the next continuation-plan task from its own brief; do not
+reopen Task 1 unless new viewport evidence contradicts this record.
