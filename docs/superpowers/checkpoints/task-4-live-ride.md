@@ -103,3 +103,21 @@ meaningful stopping point.
 - Result: **GREEN** — 37 tests executed, 37 passed, 0 failed.
 - Typecheck command: `npm.cmd run typecheck`
 - Result: **GREEN** — `tsc --noEmit` completed successfully.
+
+## GREEN evidence — live session and phone ride sheet
+
+- Wired the tested contracts into `mobile/src/useLiveRideSession.ts` and
+  `mobile/src/screens/LiveRideScreen.tsx`: first-fix waiting, away/near/
+  uncertain/stale recovery copy, duration ETA, recording-only telemetry,
+  active-draft checkpoint propagation, zero-fix warning, and save/export
+  busy/error presentation.
+- Active route content is now scrollable inside a bounded phone sheet, with a
+  persistent wrapped action bar that keeps retry, pause/resume, and end
+  reachable. The recording-only branch retains the no-route-progress and
+  foreground-only boundaries.
+- Focused command: `npx.cmd --no-install tsx --test src/routeMatcher.test.ts src/routeProgress.test.ts src/rideRecording.test.ts`
+- Result: **GREEN** — 37 tests executed, 37 passed, 0 failed.
+- Typecheck command: `npm.cmd run typecheck`
+- Result: **GREEN** — `tsc --noEmit` completed successfully.
+- Diff check command: `git diff --check -- mobile/src/useLiveRideSession.ts mobile/src/screens/LiveRideScreen.tsx mobile/src/routeMatcher.ts mobile/src/routeProgress.ts mobile/src/rideRecording.ts mobile/src/routeMatcher.test.ts mobile/src/routeProgress.test.ts mobile/src/rideRecording.test.ts docs/superpowers/checkpoints/task-4-live-ride.md`
+- Result: **GREEN** — no whitespace errors in the owned diff.

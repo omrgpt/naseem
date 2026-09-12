@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { Platform, Pressable, Text, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import type { ReactNode } from "react";
 import { MapPreview } from "../MapPreview";
 import { RouteLayerLegend } from "../RouteLayerLegend";
@@ -7,12 +13,19 @@ import { ProgressReadout, StatusBadge } from "../UiPatterns";
 import type { ActivityDraft, PositionMatchState } from "../domain";
 import { localizedConfidenceLabel, localizedVariantLabel } from "../i18n";
 import {
+  completionActionStates,
+  completionTrackState,
   completionStateForDraft,
   exportActivityDraft,
+  liveRideLocationState,
+  liveRideRecoveryActions,
+  liveRideRecoveryLabels,
   locationUnavailableCopy,
   locationUnavailableTitle,
+  recordingOnlyTelemetryLabels,
   recordingControlLabels,
   recordingOnlyLabels,
+  type LiveRideLocationState,
 } from "../rideRecording";
 import { NBH_PREVIEW_VARIANT } from "../seed";
 import {
@@ -26,6 +39,10 @@ import type { LiveRideSessionState } from "../useLiveRideSession";
 type LiveRidePositionForTask4 = NonNullable<LiveRideScreenProps["position"]> & {
   lastFixAt?: string;
   lastFixLabel?: string;
+  locationState?: LiveRideLocationState;
+  recordedDistanceLabel?: string;
+  recordedDurationLabel?: string;
+  fixCount?: number;
   activeRoute?: import("../domain").RoutePlan;
   isPaused?: boolean;
   canPause?: boolean;
@@ -87,8 +104,10 @@ export function LiveRideScreen({
 }: Task4LiveRideScreenProps) {
   const [browserExportedDraft, setBrowserExportedDraft] =
     useState<ActivityDraft | null>(null);
+  const [browserExportError, setBrowserExportError] = useState(false);
   useEffect(() => {
     setBrowserExportedDraft(null);
+    setBrowserExportError(false);
   }, [
     completionDraft?.id,
     completionDraft?.exportState,
@@ -103,8 +122,18 @@ export function LiveRideScreen({
   const numberText = (value: number, options?: Intl.NumberFormatOptions) =>
     formatNumber ? formatNumber(value, options) : String(value);
   const matchState = position?.match?.state;
+  const recoveryLabels = liveRideRecoveryLabels(rtl);
+  const telemetryLabels = recordingOnlyTelemetryLabels(rtl);
+  const locationState =
+    position?.locationState ??
+    liveRideLocationState(matchState, Boolean(position?.lastFixAt));
+  const recoveryActions = liveRideRecoveryActions({
+    active: state === "active",
+    locationState,
+    isPaused: Boolean(position?.isPaused),
+  });
   const needsLocationRecovery =
-    matchState === "stale" || matchState === "off-corridor";
+    locationState === "stale" || locationState === "away";
   const recordingLabels = recordingOnlyLabels(rtl);
   const controlLabels = recordingControlLabels(rtl);
   const completionState = viewCompletionDraft
@@ -120,14 +149,20 @@ export function LiveRideScreen({
   );
   const visualState = showCompletion ? completionState! : state;
   const handleExport = () => {
+    setBrowserExportError(false);
+    if (onExportCompletion) {
+      onExportCompletion();
+      return true;
+    }
     if (Platform.OS === "web" && completionDraft) {
       const exported = exportActivityDraft(completionDraft);
       if (exported) {
         setBrowserExportedDraft(exported);
-        return;
+        return true;
       }
     }
-    onExportCompletion?.();
+    setBrowserExportError(true);
+    return false;
   };
 
   if (showCompletion && viewCompletionDraft)
@@ -160,6 +195,7 @@ export function LiveRideScreen({
           onRetrySave={onRetrySaveCompletion}
           onDiscard={onDiscardCompletion}
           onExport={handleExport}
+          exportError={browserExportError}
         />
       </ScreenFrame>
     );
@@ -381,7 +417,7 @@ export function LiveRideScreen({
                 </Text>
               </Pressable>
             )}
-            {onRequestEndRide && (
+            {onRequestEndRide && position?.retryLocation && (
               <Pressable
                 accessibilityRole="button"
                 onPress={onRequestEndRide}
@@ -442,6 +478,7 @@ export function LiveRideScreen({
             onRetrySave={onRetrySaveCompletion}
             onDiscard={onDiscardCompletion}
             onExport={handleExport}
+            exportError={browserExportError}
           />
         ) : (
           <View style={styles.panel} accessibilityLiveRegion="polite">
@@ -522,23 +559,50 @@ export function LiveRideScreen({
       );
     if (state === "active")
       return (
-        <View style={[styles.atlas, rtl && styles.screenRtl]}>
-          <View style={styles.atlasMap}>
+        <View
+          style={[
+            styles.atlas,
+            { flex: 1, minHeight: 0 },
+            rtl && styles.screenRtl,
+          ]}
+        >
+          <View style={[styles.atlasMap, { flex: 1, minHeight: 0 }]}>
             <View
-              style={styles.emptyState}
+              style={[
+                styles.emptyState,
+                {
+                  flex: 1,
+                  minHeight: 0,
+                  justifyContent: "center",
+                  alignItems: "center",
+                },
+              ]}
               accessibilityRole="image"
-              accessibilityLabel={screenText(
-                t,
-                "recordWithoutFollowingNbh",
-                "Recording without route guidance",
-              )}
+              accessibilityLabel={
+                position?.coordinate
+                  ? recoveryLabels.near
+                  : recoveryLabels.waiting
+              }
             >
+              <View
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 12,
+                  borderWidth: 4,
+                  borderColor: position?.coordinate
+                    ? palette.accent
+                    : palette.muted,
+                  backgroundColor: position?.coordinate
+                    ? palette.accent
+                    : "transparent",
+                  marginBottom: 12,
+                }}
+              />
               <Text style={[styles.emptyTitle, rtl && styles.textRight]}>
-                {screenText(
-                  t,
-                  "recordWithoutFollowingNbh",
-                  "Recording without route guidance",
-                )}
+                {position?.coordinate
+                  ? recoveryLabels.near
+                  : recoveryLabels.waiting}
               </Text>
               <Text style={[styles.emptyCopy, rtl && styles.textRight]}>
                 {screenText(
@@ -556,58 +620,86 @@ export function LiveRideScreen({
               />
             </View>
           </View>
-          <View style={styles.atlasSheet} accessibilityLiveRegion="polite">
-            <Text style={[styles.atlasTitle, rtl && styles.textRight]}>
-              {recordingLabels.active}
-            </Text>
-            <Text style={[styles.atlasCondition, rtl && styles.textRight]}>
-              {screenText(
-                t,
-                "foregroundOnly",
-                "Naseem uses foreground location only during an active ride.",
+          <View
+            style={[
+              styles.atlasSheet,
+              { flex: 1, minHeight: 0, maxHeight: "62%" },
+            ]}
+            accessibilityLiveRegion="polite"
+          >
+            <ScrollView
+              style={{ flex: 1, minHeight: 0 }}
+              contentContainerStyle={{ gap: 13, paddingBottom: 12 }}
+              showsVerticalScrollIndicator
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={[styles.atlasTitle, rtl && styles.textRight]}>
+                {recordingLabels.active}
+              </Text>
+              <Text style={[styles.atlasCondition, rtl && styles.textRight]}>
+                {screenText(
+                  t,
+                  "foregroundOnly",
+                  "Naseem uses foreground location only during an active ride.",
+                )}
+              </Text>
+              <View style={[styles.metricRail, rtl && styles.rtlRow]}>
+                <Metric
+                  label={telemetryLabels.distance}
+                  value={
+                    position?.recordedDistanceLabel ??
+                    distanceDisplay.formatDistance(0)
+                  }
+                  styles={styles}
+                />
+                <Metric
+                  label={telemetryLabels.time}
+                  value={
+                    position?.recordedDurationLabel ??
+                    `0 ${rtl ? "دقيقة" : "min"}`
+                  }
+                  styles={styles}
+                />
+                <Metric
+                  label={telemetryLabels.fixes}
+                  value={numberText(position?.fixCount ?? 0, {
+                    maximumFractionDigits: 0,
+                  })}
+                  styles={styles}
+                />
+              </View>
+              <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+                {telemetryLabels.lastFix}: {position?.lastFixLabel ?? telemetryLabels.waiting}
+              </Text>
+              <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+                {screenText(
+                  t,
+                  "noAutoReroute",
+                  "No route progress, auto-rerouting, or turn-by-turn instructions are shown in this mode.",
+                )}
+              </Text>
+              {position?.isPaused && (
+                <Text style={[styles.alertText, rtl && styles.textRight]}>
+                  {screenText(
+                    t,
+                    "recordingPaused",
+                    "Recording paused. Resume when you are ready to continue.",
+                  )}
+                </Text>
               )}
-            </Text>
-            <Text style={[styles.fieldHint, rtl && styles.textRight]}>
-              {screenText(
-                t,
-                "noAutoReroute",
-                "No route progress, auto-rerouting, or turn-by-turn instructions are shown in this mode.",
-              )}
-            </Text>
-            <View style={styles.actionRow}>
-              {position?.isPaused ? (
-                position.resume && (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={position.resume}
-                    style={styles.secondary}
-                  >
-                    <Text style={styles.secondaryText}>
-                      {controlLabels.continue}
-                    </Text>
-                  </Pressable>
-                )
-              ) : (
-                position?.pause && (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={position.pause}
-                    style={styles.secondary}
-                  >
-                    <Text style={styles.secondaryText}>
-                      {controlLabels.pause}
-                    </Text>
-                  </Pressable>
-                )
-              )}
-              <Pressable
-                accessibilityRole="button"
-                onPress={onRequestEndRide}
-                style={[styles.primary, styles.danger]}
-              >
-                <Text style={styles.dangerText}>{recordingLabels.end}</Text>
-              </Pressable>
-            </View>
+            </ScrollView>
+            <ActiveRideActionBar
+              actions={recoveryActions}
+              rtl={rtl}
+              styles={styles}
+              labels={recoveryLabels}
+              controlLabels={controlLabels}
+              endLabel={recordingLabels.end}
+              pause={position?.pause}
+              resume={position?.resume}
+              retryLocation={position?.retryLocation}
+              onRequestEndRide={onRequestEndRide}
+            />
           </View>
         </View>
       );
@@ -685,8 +777,14 @@ export function LiveRideScreen({
 
   if (state === "active")
     return (
-      <View style={[styles.atlas, rtl && styles.screenRtl]}>
-        <View style={styles.atlasMap}>
+      <View
+        style={[
+          styles.atlas,
+          { flex: 1, minHeight: 0 },
+          rtl && styles.screenRtl,
+        ]}
+      >
+        <View style={[styles.atlasMap, { flex: 1, minHeight: 0 }]}>
           <MapPreview
             route={canonical}
             fullScreen
@@ -705,7 +803,19 @@ export function LiveRideScreen({
             />
           </View>
         </View>
-        <View style={styles.atlasSheet} accessibilityLiveRegion="polite">
+        <View
+          style={[
+            styles.atlasSheet,
+            { flex: 1, minHeight: 0, maxHeight: "62%" },
+          ]}
+          accessibilityLiveRegion="polite"
+        >
+          <ScrollView
+            style={{ flex: 1, minHeight: 0 }}
+            contentContainerStyle={{ gap: 13, paddingBottom: 12 }}
+            showsVerticalScrollIndicator
+            keyboardShouldPersistTaps="handled"
+          >
           <Text style={[styles.atlasTitle, rtl && styles.textRight]}>
             {position?.remainingLabel ??
               distanceDisplay.formatDistance(
@@ -725,7 +835,10 @@ export function LiveRideScreen({
               {screenText(t, "liveMatch", "Live route match")}
             </Text>
             <Text style={[styles.bodyText, rtl && styles.textRight]}>
-              {matchCopy(matchState, t)}
+              {matchCopy(matchState, locationState, t, recoveryLabels)}
+            </Text>
+            <Text style={[styles.fieldHint, rtl && styles.textRight]}>
+              {recoveryLabels.lastFix}: {position?.lastFixLabel ?? recoveryLabels.noFix}
             </Text>
             {position?.match?.confidence && (
               <Text style={[styles.fieldHint, rtl && styles.textRight]}>
@@ -752,80 +865,35 @@ export function LiveRideScreen({
             </View>
           ) : (
             <Text style={[styles.alertText, rtl && styles.textRight]}>
-              {screenText(
-                t,
-                "progressPaused",
-                "Progress is paused until the route match is confident.",
-              )}{" "}
-              {matchState === "off-corridor" || matchState === "stale"
+              {recoveryLabels.progressPaused}{" "}
+              {needsLocationRecovery
                 ? screenText(
                     t,
                     "checkMapAndSurroundings",
-                    "Check the map and surroundings.",
+                    rtl
+                      ? "راجع الخريطة وما حولك."
+                      : "Check the map and surroundings.",
                   )
                 : ""}
             </Text>
           )}
-          {(matchState === "stale" || matchState === "off-corridor") && (
+          {needsLocationRecovery && (
             <View style={styles.alert}>
               <Text style={[styles.alertTitle, rtl && styles.textRight]}>
-                {matchState === "stale"
-                  ? screenText(t, "staleLocation", "Stale location")
-                  : screenText(t, "offCorridor", "Off route corridor")}
+                {locationState === "stale"
+                  ? recoveryLabels.stale
+                  : recoveryLabels.away}
               </Text>
               <Text style={[styles.alertText, rtl && styles.textRight]}>
-                {screenText(
-                  t,
-                  "liveRecoveryCopy",
-                  "Check the map and surroundings. Progress stays paused until the next confident fix. You can retry, pause, continue, or end and keep this recording.",
-                )}
+                {screenText(t, "liveRecoveryCopy", recoveryLabels.recovery)}
               </Text>
               <Text style={[styles.fieldHint, rtl && styles.textRight]}>
                 {screenText(t, "lastFix", "Last fix")}:{" "}
-                {position?.lastFixLabel ||
-                  screenText(t, "noLocationFix", "No location fix yet")}
+                {position?.lastFixLabel ?? recoveryLabels.noFix}
               </Text>
-              <View style={styles.actionRow}>
-                {position?.retryLocation && (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={position.retryLocation}
-                    style={styles.secondary}
-                  >
-                    <Text style={styles.secondaryText}>
-                      {screenText(t, "retryLocation", "Retry location")}
-                    </Text>
-                  </Pressable>
-                )}
-                {position?.isPaused
-                  ? position.resume && (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={position.resume}
-                        style={styles.secondary}
-                      >
-                        <Text style={styles.secondaryText}>
-                          {controlLabels.continue}
-                        </Text>
-                      </Pressable>
-                    )
-                  : position?.pause && (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={position.pause}
-                        style={styles.secondary}
-                      >
-                        <Text style={styles.secondaryText}>
-                          {controlLabels.pause}
-                        </Text>
-                      </Pressable>
-                    )}
-              </View>
             </View>
           )}
-          {position?.isPaused &&
-            matchState !== "stale" &&
-            matchState !== "off-corridor" && (
+          {position?.isPaused && !needsLocationRecovery && (
               <Text style={[styles.alertText, rtl && styles.textRight]}>
                 {screenText(
                   t,
@@ -834,50 +902,25 @@ export function LiveRideScreen({
                 )}
               </Text>
             )}
-          <View style={styles.actionRow}>
-            {matchState !== "stale" && matchState !== "off-corridor" && (
-              position?.isPaused
-                ? position.resume && (
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={position.resume}
-                      style={styles.secondary}
-                    >
-                      <Text style={styles.secondaryText}>
-                        {controlLabels.resume}
-                      </Text>
-                    </Pressable>
-                  )
-                : position?.pause && (
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={position.pause}
-                      style={styles.secondary}
-                    >
-                      <Text style={styles.secondaryText}>
-                        {controlLabels.pause}
-                      </Text>
-                    </Pressable>
-                  )
+          </ScrollView>
+          <ActiveRideActionBar
+            actions={recoveryActions}
+            rtl={rtl}
+            styles={styles}
+            labels={recoveryLabels}
+            controlLabels={controlLabels}
+            endLabel={screenText(
+              t,
+              needsLocationRecovery ? "endRideKeepRecording" : "endRide",
+              needsLocationRecovery
+                ? "End ride and keep this recording"
+                : "End live ride",
             )}
-            <Pressable
-              accessibilityRole="button"
-              onPress={onRequestEndRide}
-              style={[styles.primary, styles.danger]}
-            >
-              <Text style={styles.dangerText}>
-                {screenText(
-                  t,
-                  needsLocationRecovery
-                    ? "endRideKeepRecording"
-                    : "endRide",
-                  needsLocationRecovery
-                    ? "End ride and keep this recording"
-                    : "End live ride",
-                )}
-              </Text>
-            </Pressable>
-          </View>
+            pause={position?.pause}
+            resume={position?.resume}
+            retryLocation={position?.retryLocation}
+            onRequestEndRide={onRequestEndRide}
+          />
         </View>
       </View>
     );
@@ -1089,6 +1132,86 @@ function EndRideConfirmation({
   );
 }
 
+function ActiveRideActionBar({
+  actions,
+  rtl,
+  styles,
+  labels,
+  controlLabels,
+  pause,
+  resume,
+  retryLocation,
+  onRequestEndRide,
+  endLabel,
+}: {
+  actions: ReturnType<typeof liveRideRecoveryActions>;
+  rtl: boolean;
+  styles: LiveRideScreenProps["styles"];
+  labels: ReturnType<typeof liveRideRecoveryLabels>;
+  controlLabels: ReturnType<typeof recordingControlLabels>;
+  pause?: () => void;
+  resume?: () => void;
+  retryLocation?: () => void;
+  onRequestEndRide?: LiveRideScreenProps["onRequestEndRide"];
+  endLabel?: string;
+}) {
+  return (
+    <View
+      style={[
+        styles.actionRow,
+        {
+          flexDirection: "row",
+          flexWrap: "wrap",
+          alignItems: "stretch",
+          flexShrink: 0,
+          paddingTop: 8,
+          paddingBottom: 24,
+        },
+        rtl && styles.rtlRow,
+      ]}
+      accessibilityRole="toolbar"
+      accessibilityLabel={labels.recovery}
+    >
+      {actions.includes("retryLocation") && retryLocation && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={retryLocation}
+          style={styles.secondary}
+        >
+          <Text style={styles.secondaryText}>{labels.retry}</Text>
+        </Pressable>
+      )}
+      {actions.includes("resume") && resume && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={resume}
+          style={styles.secondary}
+        >
+          <Text style={styles.secondaryText}>{controlLabels.resume}</Text>
+        </Pressable>
+      )}
+      {actions.includes("pause") && pause && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={pause}
+          style={styles.secondary}
+        >
+          <Text style={styles.secondaryText}>{controlLabels.pause}</Text>
+        </Pressable>
+      )}
+      {actions.includes("end") && onRequestEndRide && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={onRequestEndRide}
+          style={[styles.primary, styles.danger]}
+        >
+          <Text style={styles.dangerText}>{endLabel ?? labels.retry}</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
 function CompletionPanel({
   draft,
   t,
@@ -1101,6 +1224,7 @@ function CompletionPanel({
   onRetrySave,
   onDiscard,
   onExport,
+  exportError,
 }: {
   draft: ActivityDraft;
   t: LiveRideScreenProps["t"];
@@ -1112,14 +1236,24 @@ function CompletionPanel({
   onSave?: () => void;
   onRetrySave?: () => void;
   onDiscard?: () => void;
-  onExport?: () => void;
+  onExport?: () => boolean | void;
+  exportError?: boolean;
 }) {
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const numberText = (value: number, options?: Intl.NumberFormatOptions) =>
     formatNumber ? formatNumber(value, options) : String(value);
   useEffect(() => {
     setSaving(false);
-  }, [draft.completionState]);
+    setExporting(false);
+  }, [draft.id, draft.completionState, draft.exportState, exportError]);
+  const recoveryLabels = liveRideRecoveryLabels(rtl);
+  const trackState = completionTrackState(draft);
+  const actionStates = completionActionStates(draft, {
+    saving,
+    exporting,
+    exportError,
+  });
   const routeName = draft.routeSnapshot
     ? rtl && draft.routeSnapshot.nameAr
       ? draft.routeSnapshot.nameAr
@@ -1211,6 +1345,13 @@ function CompletionPanel({
           styles={styles}
         />
       </View>
+      {trackState === "no-fix" && (
+        <View style={styles.alert} accessibilityRole="alert">
+          <Text style={[styles.alertText, rtl && styles.textRight]}>
+            {recoveryLabels.noTrack}
+          </Text>
+        </View>
+      )}
       <Text style={[styles.fieldHint, rtl && styles.textRight]}>
         {screenText(t, "gaps", "Location gaps")}:{" "}
         {numberText(draft.gaps, { maximumFractionDigits: 0 })}
@@ -1259,6 +1400,11 @@ function CompletionPanel({
           {screenText(t, "exportedRide", "Ride export ready.")}
         </Text>
       )}
+      {exportError && (
+        <Text style={[styles.alertText, rtl && styles.textRight]}>
+          {recoveryLabels.exportFailed}
+        </Text>
+      )}
       {!discarded && (
         <View style={styles.actionRow}>
           {!saved &&
@@ -1266,34 +1412,38 @@ function CompletionPanel({
               ? onRetrySave && (
                   <Pressable
                     accessibilityRole="button"
-                    disabled={saving}
-                    accessibilityState={{ disabled: saving }}
+                    disabled={actionStates.save === "busy"}
+                    accessibilityState={{ disabled: actionStates.save === "busy" }}
                     onPress={() => {
-                      if (saving) return;
+                      if (actionStates.save === "busy") return;
                       setSaving(true);
                       onRetrySave();
                     }}
-                    style={[styles.primary, saving && styles.disabled]}
+                    style={[styles.primary, actionStates.save === "busy" && styles.disabled]}
                   >
                     <Text style={styles.primaryText}>
-                      {screenText(t, "retrySave", "Retry save")}
+                      {actionStates.save === "busy"
+                        ? recoveryLabels.saving
+                        : screenText(t, "retrySave", "Retry save")}
                     </Text>
                   </Pressable>
                 )
               : onSave && (
                   <Pressable
                     accessibilityRole="button"
-                    disabled={saving}
-                    accessibilityState={{ disabled: saving }}
+                    disabled={actionStates.save === "busy"}
+                    accessibilityState={{ disabled: actionStates.save === "busy" }}
                     onPress={() => {
-                      if (saving) return;
+                      if (actionStates.save === "busy") return;
                       setSaving(true);
                       onSave();
                     }}
-                    style={[styles.primary, saving && styles.disabled]}
+                    style={[styles.primary, actionStates.save === "busy" && styles.disabled]}
                   >
                     <Text style={styles.primaryText}>
-                      {screenText(t, "saveRide", "Save ride")}
+                      {actionStates.save === "busy"
+                        ? recoveryLabels.saving
+                        : screenText(t, "saveRide", "Save ride")}
                     </Text>
                   </Pressable>
                 ))}
@@ -1316,11 +1466,20 @@ function CompletionPanel({
           {onExport && (
             <Pressable
               accessibilityRole="button"
-              onPress={onExport}
-              style={styles.secondary}
+              disabled={actionStates.export === "busy"}
+              accessibilityState={{ disabled: actionStates.export === "busy" }}
+              onPress={() => {
+                if (actionStates.export === "busy") return;
+                setExporting(true);
+                const result = onExport();
+                if (result === false) setExporting(false);
+              }}
+              style={[styles.secondary, actionStates.export === "busy" && styles.disabled]}
             >
               <Text style={styles.secondaryText}>
-                {screenText(t, "exportRide", "Export ride")}
+                {actionStates.export === "busy"
+                  ? recoveryLabels.exporting
+                  : screenText(t, "exportRide", "Export ride")}
               </Text>
             </Pressable>
           )}
@@ -1332,17 +1491,19 @@ function CompletionPanel({
 
 function matchCopy(
   state: PositionMatchState | undefined,
+  locationState: LiveRideLocationState,
   t: LiveRideScreenProps["t"],
+  labels: ReturnType<typeof liveRideRecoveryLabels>,
 ) {
+  if (locationState === "waiting") return labels.waiting;
+  if (locationState === "away") return labels.away;
+  if (locationState === "stale") return labels.stale;
+  if (locationState === "uncertain") return labels.uncertain;
   if (state === "approaching")
     return screenText(t, "approachingEntry", "Approaching entry");
   if (state === "matched")
     return screenText(t, "positionMatched", "Position matched");
-  if (state === "off-corridor")
-    return `${screenText(t, "offCorridor", "Off route corridor")} · ${screenText(t, "checkMapAndSurroundings", "Check the map and surroundings.")}`;
-  if (state === "stale")
-    return `${screenText(t, "staleLocation", "Stale location")} · ${screenText(t, "checkMapAndSurroundings", "Check the map and surroundings.")}`;
-  return screenText(t, "locationUncertain", "Location uncertain");
+  return labels.uncertain;
 }
 
 function ScreenFrame({
