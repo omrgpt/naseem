@@ -8,7 +8,7 @@ Status: `COMPLETE`
 - Branch: `codex/naseem-release-fixes`
 - Pre-implementation HEAD: `f9f87fd`
 - Implementation commit: `77cad24 feat(naseem): add real endpoint and sketch road checks`
-- Final documentation commit: pending hash verification below
+- Documentation commits: `f731485` (checkpoint) and `13c9fbd` (report)
 
 The implementation stayed within Task 2 scope. `mobile/src/routeLifecycle.ts`
 was not modified because its existing canonical matching transition seam already
@@ -73,5 +73,5 @@ Changed for Task 2:
 - `.superpowers/sdd/2026-09-12-release-continuation/task-2-report.md`
 
 `mobile/src/routeLifecycle.ts` was inspected but unchanged. Implementation is
-in `77cad24`; the documentation commit hash will be recorded after the final
-commit verification.
+in `77cad24`; the checkpoint and report are committed in `f731485` and
+`13c9fbd` respectively.

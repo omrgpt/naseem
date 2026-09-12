@@ -8,7 +8,7 @@ Status: `COMPLETE`
 - Branch: `codex/naseem-release-fixes`
 - Pre-implementation HEAD: `f9f87fd`
 - Implementation commit: `77cad24 feat(naseem): add real endpoint and sketch road checks`
-- Documentation finalization commit: pending hash verification below
+- Documentation commits: `f731485` (checkpoint) and `13c9fbd` (report)
 
 ## Owned files changed
 
