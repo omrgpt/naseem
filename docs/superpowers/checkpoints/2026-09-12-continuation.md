@@ -66,17 +66,19 @@ sidebar notification or a usage-limit banner.
 
 ## Agent status at checkpoint
 
-Six read-only audit agents were dispatched with Luna Max and were still
-running when this file was written:
+Five original read-only audit agents remain active. Descartes completed and
+its findings are saved in `map-drawing-audit.md`; its slot was then reused for
+Kierkegaard's accessibility audit:
 
 | Scope | Agent id | Expected durable output |
 | --- | --- | --- |
-| Map drawing | `01a092e9-bc42-7ee1-8ccd-e0b601535d68` | detailed drawing/gesture audit |
+| Map drawing | `01a092e9-bc42-7ee1-8ccd-e0b601535d68` | **complete; see `map-drawing-audit.md`** |
 | Map visual | `01a092e9-bd05-76b2-90f0-1eb23383211f` | map visual/responsive audit |
 | Route builder | `01a092e9-bdf7-7e53-9cc7-ac09b78cff32` | geometry/model audit |
 | Home/Plan | `01a092e9-beed-7650-b317-e2398fac83f8` | first-use flow audit |
 | Live Ride | `01a092e9-bfe9-76a0-900d-6c21624ec4b3` | live/recovery audit |
 | Arabic/RTL | `01a092e9-c104-7d43-903e-e8bd2977d813` | bilingual layout/copy audit |
+| Accessibility | `01a092f7-eeaf-7dc1-b21e-449b76401312` | interaction/accessibility audit |
 
 The previous persona/reviewer batch did not yield feedback: the agents became
 unavailable after usage-limit errors. Their absence is not evidence that the
