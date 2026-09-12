@@ -1312,13 +1312,7 @@ function ManualSketchReviewPanel({
       )}
       <Pressable accessibilityRole="button" onPress={onUse} style={styles.primary}>
         <Text style={styles.primaryText}>
-          {manualMatchStatus === "ready"
-            ? rtl
-              ? "استخدم الخطة للمراجعة"
-              : "Use as a reviewed plan"
-            : rtl
-              ? "استخدم كخطة غير ملاحية"
-              : "Use as a non-navigation plan"}
+          {rtl ? "استخدم كخطة غير ملاحية" : "Use as a non-navigation plan"}
         </Text>
       </Pressable>
       <Pressable accessibilityRole="button" onPress={onSave} style={styles.secondary}>

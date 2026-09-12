@@ -39,6 +39,13 @@ Status: `IN PROGRESS`
   failure branch still used the English `manualRoadCheckFailed` fallback
   instead of the localized `t.routeMatchFailure` copy.
 
+## Scope-copy RED evidence
+
+- Focused command: `npx.cmd tsx --test src/appIntegration.test.ts`
+- Result: **RED** — 18 tests executed, 17 passed, 1 failed because the ready
+  action label had drifted to `Use as a reviewed plan` instead of preserving
+  the required explicit `Use as a non-navigation plan` action boundary.
+
 ## Worktree and branch
 
 - Worktree: `C:\\Users\\PC\\Documents\\ChatGPT\\Bike\\.worktrees\\naseem-release-fixes`
