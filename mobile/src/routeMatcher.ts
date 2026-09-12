@@ -26,14 +26,16 @@ export function matchRoutePosition(route: RoutePlan, coordinate: Coordinate, opt
   const canonicalDistanceKm = route.routedDistanceKm ?? route.distanceKm;
   const progressRoute = route.routedDistanceKm === undefined ? route : { ...route, distanceKm: canonicalDistanceKm };
   const previous = options.previous;
-  const raw = routeProgress(progressRoute, coordinate, 0);
+  const previousProgress = previous?.progress ?? 0;
+  const raw = routeProgress(progressRoute, coordinate, previousProgress);
   const accuracyMeters = options.accuracyMeters;
   const entryDistanceKm = distanceKm(coordinate, route.points[0]);
   const loopAtEntry = isLoop(route) && entryDistanceKm <= Math.max(0.12, (accuracyMeters ?? 0) / 1_000);
+  const completedLoop = loopAtEntry && previousProgress >= 0.75 && raw.progress >= 0.95;
   const stale = options.referenceAt ? new Date(options.referenceAt).getTime() - new Date(timestamp).getTime() > STALE_AFTER_MS : false;
   const tooFar = raw.offRouteKm > Math.max(OFF_CORRIDOR_THRESHOLD_KM, (accuracyMeters ?? 0) / 1_000 * 2);
   const lowAccuracy = accuracyMeters !== undefined && accuracyMeters > 80;
-  const candidateCount = loopAtEntry ? 2 : 1;
+  const candidateCount = loopAtEntry && !completedLoop ? 2 : 1;
   let state: PositionMatchState = stale ? 'stale' : tooFar ? 'off-corridor' : candidateCount > 1 ? 'uncertain' : lowAccuracy ? 'uncertain' : raw.progress < 0.04 && entryDistanceKm > 0.25 ? 'approaching' : 'matched';
   let progress = raw.progress;
   if (state === 'off-corridor' || state === 'stale' || state === 'uncertain') progress = previous?.progress ?? 0;

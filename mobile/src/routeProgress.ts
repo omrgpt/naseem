@@ -3,8 +3,8 @@ import type { Coordinate, RoutePlan } from './domain';
 export type RoutePosition = { progress: number; offRouteKm: number };
 
 /** Project a GPS fix onto the nearest route segment in local metres.
- * Previous progress breaks ties at a loop's shared start/finish and keeps the
- * readout monotonic while a rider is moving forward.
+ * Previous progress breaks ties at a loop's shared start/finish. Stateful
+ * callers apply any monotonic/reverse hysteresis around this projection.
  */
 export function routeProgress(route: RoutePlan, location: Coordinate, previousProgress = 0): RoutePosition {
   const line = route.geometry?.length && route.geometryDistancesKm?.length === route.geometry.length ? route.geometry : route.points;
@@ -34,7 +34,7 @@ export function routeProgress(route: RoutePlan, location: Coordinate, previousPr
   const selected = (forward.length ? forward : tieCandidates).sort((a, b) => Math.abs(a.alongKm - previousProgress * route.distanceKm) - Math.abs(b.alongKm - previousProgress * route.distanceKm))[0] ?? candidates[0];
   // The local projection scales degrees to kilometres, so the nearest
   // distance already matches the `offRouteKm` contract used by the live UI.
-  return { progress: Math.max(previousProgress, Math.max(0, Math.min(1, selected.alongKm / Math.max(route.distanceKm, 1)))), offRouteKm: selected.distance };
+  return { progress: Math.max(0, Math.min(1, selected.alongKm / Math.max(route.distanceKm, 1))), offRouteKm: selected.distance };
 }
 
 export function segmentIndexForProgress(route: RoutePlan, progress: number) {

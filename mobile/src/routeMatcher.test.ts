@@ -45,6 +45,24 @@ test('stateful matcher holds reverse movement until sustained evidence', () => {
   assert.ok(sustainedBack.progress < forward.progress);
 });
 
+test('stateful matcher resolves a shared loop finish from the previous progress', () => {
+  const route = readyRoadRoute();
+  const matcher = createStatefulRouteMatcher(route);
+  const beforeFinish = matcher.update(route.points[3], {
+    accuracyMeters: 10,
+    timestamp: '2026-09-10T14:40:00Z',
+  });
+  const finish = matcher.update(route.points.at(-1)!, {
+    accuracyMeters: 10,
+    timestamp: '2026-09-10T14:41:00Z',
+  });
+
+  assert.ok(beforeFinish.progress > 0.75);
+  assert.equal(finish.state, 'matched');
+  assert.equal(finish.progress, 1);
+  assert.equal(finish.routeDistanceKm, route.routedDistanceKm ?? route.distanceKm);
+});
+
 test('stale location is explicit', () => {
   const route = readyRoadRoute();
   const result = matchRoutePosition(route, route.points[1], { accuracyMeters: 10, timestamp: '2026-09-10T14:40:00Z', referenceAt: '2026-09-10T14:42:00Z' });
