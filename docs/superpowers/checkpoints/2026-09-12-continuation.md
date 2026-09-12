@@ -10,20 +10,19 @@ work is complete.
 - Repository: `C:\Users\PC\Documents\ChatGPT\Bike`
 - Active worktree: `C:\Users\PC\Documents\ChatGPT\Bike\.worktrees\naseem-release-fixes`
 - Branch: `codex/naseem-release-fixes`
-- Checkpoint HEAD: `72b1aaa`
+- Checkpoint HEAD before this document update: `3e359f6`
 - Existing product commits through this checkpoint are durable in Git.
 - Existing dirty files are scratch/reports from the earlier hardening pass;
   preserve them unless the user explicitly asks to clean them.
 
 ## Verified before this checkpoint
 
-- `npm.cmd test -- --runInBand`: 238 passed, 0 failed.
+- `npm.cmd test -- --runInBand`: 242 passed, 0 failed after Task 1.
 - `npm.cmd run typecheck`: passed.
 - `npx.cmd expo-doctor`: 21/21 passed after the Expo patch alignment.
 - `git diff --check`: passed.
 - Web server was running from this worktree on `http://localhost:8092` when
-  available; browser automation later reported that no browser surface was
-  available, so rendered QA must be retried rather than assumed.
+  available.
 
 ## Rendered evidence observed after restart
 
@@ -35,6 +34,11 @@ not show a real map or a pencil/stroke interaction. At the default desktop
 viewport, the visible route is a coarse dashed chord and the map dominates the
 viewport before the user reaches the useful actions. These observations are
 from the live DOM/screenshot, not inferred from tests.
+
+Task 1 then closed the measured map safe-area gap. Its durable report records
+passing web checks at `390x844`, `320x568`, `1280x720`, and `1536x864`, with
+controls and attribution inside the unobscured map rectangle and the phone
+sheet kept clear. Native device/emulator behavior remains unverified.
 
 ## Current redesign scope
 
@@ -99,11 +103,24 @@ persona study passed. After the current audit agents return, start the five
 persona studies again in available slots and request full screen/step,
 expected-vs-actual, severity, and feature-request feedback.
 
+Current continuation agents:
+
+- Task 1 implementation: Parfit completed with `becaff3` and `3e359f6`; its
+  product files are clean. Bernoulli (`01a095ca-cf7b-78f2-a2bb-a67c75b9c8d6`)
+  is performing the required independent read-only review and has not returned
+  a terminal verdict yet.
+- Task 2 endpoint/sketch implementation: Cicero
+  (`01a095d5-a291-7fd3-98b7-9229063fc01e`) is active. Its IN PROGRESS
+  checkpoint is `docs/superpowers/checkpoints/task-2-endpoint-picker.md`.
+  It owns only the App/Routes/builder/lifecycle and focused-test files listed in
+  the Task 2 brief.
+
 ## Resume checklist
 
 1. Read this file.
-2. Verify the six IDs above with the agent wait/status tool. Do not close a
-   running agent; close only a returned completion/error.
+2. Verify the six IDs above plus any current continuation agent IDs with the
+   agent wait/status tool. Do not close a running agent; close only a returned
+   completion/error.
 3. Inspect `git status --short`, `git log --oneline`, and all checkpoint files.
 4. Save each returned audit as a durable report before acting on it.
 5. Dispatch only disjoint implementation scopes, with the durability protocol
