@@ -1,8 +1,20 @@
 import { useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import {
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { MapPreview } from "../MapPreview";
 import { RouteLayerLegend } from "../RouteLayerLegend";
 import { StatusBadge } from "../UiPatterns";
+import {
+  createMapAvailableRect,
+  ROUTE_DETAIL_TOP_BAR_INSET,
+  routeDetailSurfaceLayout,
+  type MapRectSize,
+} from "../mapPreviewContract";
 import {
   asCanonicalRoute,
   routeCollection,
@@ -85,6 +97,37 @@ export function RouteDetailScreen({
   const [stopEditorOpen, setStopEditorOpen] = useState(false);
   const [reversePreviewOpen, setReversePreviewOpen] = useState(false);
   const [editPointsOpen, setEditPointsOpen] = useState(false);
+  const [mapHostSize, setMapHostSize] = useState<MapRectSize>({
+    width: 0,
+    height: 0,
+  });
+  const windowDimensions =
+    typeof useWindowDimensions === "function"
+      ? useWindowDimensions()
+      : { width: 0, height: 0 };
+  const surfaceLayout = routeDetailSurfaceLayout(windowDimensions);
+  const availableMapRect = createMapAvailableRect(
+    mapHostSize,
+    {
+      ...surfaceLayout.obstruction,
+      top:
+        surfaceLayout.mode === "mobile" ? ROUTE_DETAIL_TOP_BAR_INSET : 0,
+    },
+  );
+  const handleMapLayout = (event: any) => {
+    const layout = event?.nativeEvent?.layout;
+    const next = {
+      width: Number(layout?.width),
+      height: Number(layout?.height),
+    };
+    if (!Number.isFinite(next.width) || !Number.isFinite(next.height)) return;
+    if (next.width <= 0 || next.height <= 0) return;
+    setMapHostSize((current) =>
+      current.width === next.width && current.height === next.height
+        ? current
+        : next,
+    );
+  };
   const canonical = asCanonicalRoute(route);
   const localText = (english: string, arabic: string) =>
     rtl ? arabic : english;
@@ -330,14 +373,27 @@ export function RouteDetailScreen({
 
   return (
     <View
-      style={[styles.atlas, routeDetailInlineStyles.root, rtl && styles.screenRtl]}
+      style={[
+        styles.atlas,
+        routeDetailInlineStyles.root,
+        surfaceLayout.mode === "desktop" && styles.atlasDesktop,
+        rtl && styles.screenRtl,
+      ]}
     >
-      <View style={[styles.atlasMap, routeDetailInlineStyles.map]}>
+      <View
+        onLayout={handleMapLayout}
+        style={[
+          styles.atlasMap,
+          routeDetailInlineStyles.map,
+          surfaceLayout.mode === "desktop" && styles.atlasMapDesktop,
+        ]}
+      >
         <MapPreview
           route={canonical}
           fullScreen
           minimal
           rtl={rtl}
+          availableMapRect={availableMapRect}
           roadLabels={roadLabels}
           mapText={{
             ...mapText,
@@ -377,6 +433,7 @@ export function RouteDetailScreen({
           styles.atlasSheet,
           expanded && styles.atlasSheetExpanded,
           routeDetailInlineStyles.sheet,
+          surfaceLayout.mode === "desktop" && styles.atlasSheetDesktop,
         ]}
         accessibilityRole="summary"
         accessibilityLabel={`${canonical.name}. ${identityLabel}. ${status}`}

@@ -2,6 +2,7 @@ import { Platform } from "react-native";
 import { MapPreview as NativeMapPreview } from "./MapPreview.native";
 import { MapPreview as WebMapPreview } from "./MapPreview.web";
 import type { Coordinate, RoadKind, RoutePlan, RoutePoint } from "./domain";
+import type { MapAvailableRect } from "./mapPreviewContract";
 
 export type MapText = {
   native: string;
@@ -63,6 +64,8 @@ export type MapPreviewProps = {
   userCoordinate?: Coordinate;
   /** The endpoint currently owned by map placement, when a picker supplies it. */
   activeEndpoint?: "start" | "destination";
+  /** Parent-measured host and the portion hidden by an overlapping surface. */
+  availableMapRect?: MapAvailableRect;
   onReset?: () => void;
   onMapPress?: (coordinate: Coordinate) => void;
   /** Optional marker selection; the renderer never mutates route state. */

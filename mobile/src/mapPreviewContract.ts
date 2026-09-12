@@ -32,11 +32,111 @@ export type MapDisplayBounds = {
   longitudeDelta: number;
 };
 
+export type MapRectSize = {
+  width: number;
+  height: number;
+};
+
+export type MapInsets = {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+};
+
+export type MapBottomObstruction = {
+  sheet: number;
+  navigation: number;
+};
+
+export type MapAvailableRect = {
+  host: MapRectSize;
+  obstruction: MapBottomObstruction;
+  insets: MapInsets;
+  available: MapRectSize;
+};
+
+type MapAvailableRectOptions = Partial<MapInsets> &
+  Partial<MapBottomObstruction>;
+
 const DEFAULT_MAP_CENTER: Coordinate = { latitude: 26.18, longitude: 50.53 };
 const DEFAULT_LATITUDE_DELTA = 0.08;
 const DEFAULT_LONGITUDE_DELTA = 0.12;
 const MIN_DISPLAY_DELTA = 0.01;
 const DISPLAY_PADDING = 1.2;
+
+export const ROUTE_DETAIL_DESKTOP_BREAKPOINT = 900;
+export const ROUTE_DETAIL_SHEET_OVERLAP = 28;
+export const ROUTE_DETAIL_TOP_BAR_INSET = 58;
+
+function nonNegativeFinite(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function normalizeMapInsets(
+  options: MapAvailableRectOptions | undefined,
+): MapInsets {
+  const sheet = nonNegativeFinite(options?.sheet);
+  const navigation = nonNegativeFinite(options?.navigation);
+  return {
+    top: nonNegativeFinite(options?.top),
+    right: nonNegativeFinite(options?.right),
+    bottom: Math.max(
+      nonNegativeFinite(options?.bottom),
+      sheet,
+      navigation,
+    ),
+    left: nonNegativeFinite(options?.left),
+  };
+}
+
+/**
+ * Keep the measured host and every bottom obstruction together so renderers
+ * can fit route content inside the rectangle the rider can actually see.
+ * Sheet and navigation obstructions are bottom-anchored and therefore use
+ * the larger occupied edge; callers can pass an explicit bottom inset when
+ * separate surfaces are stacked.
+ */
+export function createMapAvailableRect(
+  host: MapRectSize,
+  options: MapAvailableRectOptions = {},
+): MapAvailableRect {
+  const hostSize = {
+    width: nonNegativeFinite(host?.width),
+    height: nonNegativeFinite(host?.height),
+  };
+  const obstruction = {
+    sheet: nonNegativeFinite(options.sheet),
+    navigation: nonNegativeFinite(options.navigation),
+  };
+  const insets = normalizeMapInsets(options);
+  return {
+    host: hostSize,
+    obstruction,
+    insets,
+    available: {
+      width: Math.max(0, hostSize.width - insets.left - insets.right),
+      height: Math.max(0, hostSize.height - insets.top - insets.bottom),
+    },
+  };
+}
+
+export function routeDetailSurfaceLayout(viewport: MapRectSize): {
+  mode: "mobile" | "desktop";
+  obstruction: MapBottomObstruction;
+} {
+  const isDesktop =
+    nonNegativeFinite(viewport?.width) >= ROUTE_DETAIL_DESKTOP_BREAKPOINT;
+  return {
+    mode: isDesktop ? "desktop" : "mobile",
+    obstruction: {
+      sheet: isDesktop ? 0 : ROUTE_DETAIL_SHEET_OVERLAP,
+      navigation: 0,
+    },
+  };
+}
 
 export type MapControlLayout = {
   top: number;
@@ -90,23 +190,31 @@ export function mapDisplayBounds(
 }
 
 export function mapControlLayout(
-  viewport: { width: number; height: number },
+  viewport: MapRectSize,
   mapHeight: number,
   controlHeight: number,
+  insets?: Partial<MapInsets>,
 ): MapControlLayout {
   const availableHeight = Math.min(
-    Math.max(0, Number.isFinite(mapHeight) ? mapHeight : 0),
-    Math.max(0, Number.isFinite(viewport.height) ? viewport.height : 0),
+    nonNegativeFinite(mapHeight),
+    nonNegativeFinite(viewport?.height) || nonNegativeFinite(mapHeight),
   );
-  const bottom = MAP_BOTTOM_SAFE_ZONE + MAP_CONTROL_CLEARANCE;
-  const safeControlHeight = Math.max(
-    0,
-    Number.isFinite(controlHeight) ? controlHeight : 0,
-  );
+  const normalizedInsets = normalizeMapInsets(insets);
+  const bottomSafeZone =
+    normalizedInsets.bottom > 0
+      ? normalizedInsets.bottom
+      : MAP_BOTTOM_SAFE_ZONE;
+  const bottom =
+    bottomSafeZone + MAP_CONTROL_CLEARANCE;
+  const safeControlHeight = nonNegativeFinite(controlHeight);
   return {
-    top: Math.max(0, availableHeight - bottom - safeControlHeight),
+    top: Math.max(
+      normalizedInsets.top,
+      availableHeight - bottom - safeControlHeight,
+    ),
     bottom,
-    visible: availableHeight >= bottom + safeControlHeight,
+    visible:
+      availableHeight >= normalizedInsets.top + bottom + safeControlHeight,
   };
 }
 

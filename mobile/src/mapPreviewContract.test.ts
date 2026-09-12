@@ -91,6 +91,144 @@ test("map controls stay above the bottom safe zone on phone and desktop surfaces
   }
 });
 
+test("available map rectangles preserve host size and subtract sheet/navigation obstructions", () => {
+  const createMapAvailableRect = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      createMapAvailableRect?: (
+        host: { width: number; height: number },
+        obstruction?: {
+          top?: number;
+          right?: number;
+          bottom?: number;
+          left?: number;
+          sheet?: number;
+          navigation?: number;
+        },
+      ) => {
+        host: { width: number; height: number };
+        obstruction: { sheet: number; navigation: number };
+        insets: { top: number; right: number; bottom: number; left: number };
+        available: { width: number; height: number };
+      };
+    }
+  ).createMapAvailableRect;
+  assert.equal(typeof createMapAvailableRect, "function");
+  if (!createMapAvailableRect) return;
+
+  assert.deepEqual(
+    createMapAvailableRect(
+      { width: 390, height: 520 },
+      { top: 12, right: 8, left: 8, sheet: 28, navigation: 112 },
+    ),
+    {
+      host: { width: 390, height: 520 },
+      obstruction: { sheet: 28, navigation: 112 },
+      insets: { top: 12, right: 8, bottom: 112, left: 8 },
+      available: { width: 374, height: 396 },
+    },
+  );
+});
+
+test("map controls include the largest bottom obstruction in their safe zone", () => {
+  const createMapAvailableRect = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      createMapAvailableRect?: (
+        host: { width: number; height: number },
+        obstruction?: { sheet?: number; navigation?: number },
+      ) => {
+        host: { width: number; height: number };
+        insets: { top: number; right: number; bottom: number; left: number };
+      };
+    }
+  ).createMapAvailableRect;
+  const mapControlLayout = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      mapControlLayout?: (
+        viewport: { width: number; height: number },
+        mapHeight: number,
+        controlHeight: number,
+        insets?: { top?: number; right?: number; bottom?: number; left?: number },
+      ) => { top: number; bottom: number; visible: boolean };
+    }
+  ).mapControlLayout;
+  assert.equal(typeof createMapAvailableRect, "function");
+  assert.equal(typeof mapControlLayout, "function");
+  if (!createMapAvailableRect || !mapControlLayout) return;
+
+  const rect = createMapAvailableRect(
+    { width: 390, height: 320 },
+    { sheet: 28, navigation: 112 },
+  );
+  const controls = mapControlLayout(
+    rect.host,
+    rect.host.height,
+    146,
+    rect.insets,
+  );
+  assert.equal(controls.visible, true);
+  assert.ok(controls.bottom >= 120);
+  assert.ok(controls.top >= rect.insets.top);
+});
+
+test("route detail controls fit between a small phone top bar and sheet", () => {
+  const createMapAvailableRect = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      createMapAvailableRect?: (
+        host: { width: number; height: number },
+        obstruction?: { top?: number; sheet?: number },
+      ) => {
+        host: { width: number; height: number };
+        insets: { top: number; right: number; bottom: number; left: number };
+      };
+    }
+  ).createMapAvailableRect;
+  const mapControlLayout = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      mapControlLayout?: (
+        viewport: { width: number; height: number },
+        mapHeight: number,
+        controlHeight: number,
+        insets?: { top?: number; right?: number; bottom?: number; left?: number },
+      ) => { top: number; bottom: number; visible: boolean };
+    }
+  ).mapControlLayout;
+  assert.equal(typeof createMapAvailableRect, "function");
+  assert.equal(typeof mapControlLayout, "function");
+  if (!createMapAvailableRect || !mapControlLayout) return;
+
+  const rect = createMapAvailableRect(
+    { width: 320, height: 248 },
+    { top: 58, sheet: 28 },
+  );
+  const controls = mapControlLayout(rect.host, rect.host.height, 146, rect.insets);
+  assert.equal(controls.bottom, 36);
+  assert.equal(controls.visible, true);
+  assert.ok(controls.top >= rect.insets.top);
+  assert.ok(controls.top + 146 <= rect.host.height - rect.insets.bottom);
+});
+
+test("route detail switches from a phone sheet to a non-overlapping desktop split", () => {
+  const routeDetailSurfaceLayout = (
+    mapPreviewContract as typeof mapPreviewContract & {
+      routeDetailSurfaceLayout?: (viewport: { width: number; height: number }) => {
+        mode: "mobile" | "desktop";
+        obstruction: { sheet: number; navigation: number };
+      };
+    }
+  ).routeDetailSurfaceLayout;
+  assert.equal(typeof routeDetailSurfaceLayout, "function");
+  if (!routeDetailSurfaceLayout) return;
+
+  assert.deepEqual(routeDetailSurfaceLayout({ width: 390, height: 844 }), {
+    mode: "mobile",
+    obstruction: { sheet: 28, navigation: 0 },
+  });
+  assert.deepEqual(routeDetailSurfaceLayout({ width: 1280, height: 720 }), {
+    mode: "desktop",
+    obstruction: { sheet: 0, navigation: 0 },
+  });
+});
+
 test("native provider falls back without a configured Google key", () => {
   const selectMapProvider = (
     mapPreviewContract as typeof mapPreviewContract & {

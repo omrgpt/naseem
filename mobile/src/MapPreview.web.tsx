@@ -5,7 +5,6 @@ import {
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
   type GestureResponderEvent,
 } from "react-native";
 import {
@@ -21,8 +20,11 @@ import Svg, { Polyline as SvgPolyline } from "react-native-svg";
 import type { Coordinate, RoadKind, RoutePlan } from "./domain";
 import type { MapPreviewProps } from "./MapPreview";
 import {
+  createMapAvailableRect,
   MAP_MARKER_HIT_SIZE,
   MAP_MARKER_HIT_TARGET,
+  type MapAvailableRect,
+  type MapRectSize,
   hasFiniteCoordinate,
   mapControlLayout,
   mapDisplayBounds,
@@ -76,14 +78,40 @@ export function MapPreview({
   userCoordinate,
   roadLabels,
   mapText,
+  availableMapRect,
 }: Props) {
-  const { width: viewportWidth } = useWindowDimensions();
-  const width = Math.max(260, Math.min(728, viewportWidth - 32));
-  const height = fullScreen ? 448 : compact ? 248 : 352;
+  const [measuredHostSize, setMeasuredHostSize] = useState<
+    MapRectSize | undefined
+  >();
+  const width =
+    measuredHostSize?.width && measuredHostSize.width > 0
+      ? measuredHostSize.width
+      : availableMapRect?.host.width && availableMapRect.host.width > 0
+        ? availableMapRect.host.width
+        : 320;
+  const height =
+    measuredHostSize?.height && measuredHostSize.height > 0
+      ? measuredHostSize.height
+      : availableMapRect?.host.height && availableMapRect.host.height > 0
+        ? availableMapRect.host.height
+        : compact
+          ? 248
+          : 240;
+  const mapRect = createMapAvailableRect(
+    { width, height },
+    availableMapRect
+      ? { ...availableMapRect.insets, ...availableMapRect.obstruction }
+      : undefined,
+  );
+  const mapOrigin = {
+    x: mapRect.insets.left + mapRect.available.width / 2,
+    y: mapRect.insets.top + mapRect.available.height / 2,
+  };
   const minimalControlLayout = mapControlLayout(
     { width, height },
     height,
     146,
+    mapRect.insets,
   );
   const { linePoints, lineStyle, roadMatched, status: mapStatus } = mapLineModel(
     route,
@@ -117,7 +145,14 @@ export function MapPreview({
   panRef.current = pan;
   const zoom = Math.max(
     9,
-    Math.min(16, fitZoom(viewportBounds.coordinates, width, height) + zoomOffset),
+    Math.min(
+      16,
+      fitZoom(
+        viewportBounds.coordinates,
+        mapRect.available.width,
+        mapRect.available.height,
+      ) + zoomOffset,
+    ),
   );
   const center = mapCenter;
   const markerEntries = mapMarkerPoints(route, linePoints, roadMatched);
@@ -130,13 +165,12 @@ export function MapPreview({
       entry.coordinate,
       zoom,
       centerWorld,
-      width,
-      height,
+      mapRect,
       pan,
     ),
   }));
   const linePositions = linePoints.map((point) =>
-    toPosition(point, zoom, centerWorld, width, height, pan),
+    toPosition(point, zoom, centerWorld, mapRect, pan),
   );
   const linePaths = buildLinePaths(linePoints, linePositions, route);
   const roadLabelFor = (kind: RoadKind) =>
@@ -147,7 +181,7 @@ export function MapPreview({
         : "Road evidence unavailable"
       : LABELS[kind]);
   const userPosition = hasFiniteCoordinate(userCoordinate)
-    ? toPosition(userCoordinate, zoom, centerWorld, width, height, pan)
+    ? toPosition(userCoordinate, zoom, centerWorld, mapRect, pan)
     : undefined;
   const tiles: Array<{ x: number; y: number; left: number; top: number }> = [];
   // Four-by-four coverage keeps hand panning filled without requesting a
@@ -159,8 +193,8 @@ export function MapPreview({
       tiles.push({
         x,
         y,
-        left: width / 2 + x * 256 - centerWorld.x + pan.x,
-        top: height / 2 + y * 256 - centerWorld.y + pan.y,
+        left: mapOrigin.x + x * 256 - centerWorld.x + pan.x,
+        top: mapOrigin.y + y * 256 - centerWorld.y + pan.y,
       });
     }
   const text = {
@@ -293,8 +327,14 @@ export function MapPreview({
     onMapPress(coordinate);
   };
   const clampPan = (next: { x: number; y: number }) => ({
-    x: Math.max(-width * 0.45, Math.min(width * 0.45, next.x)),
-    y: Math.max(-height * 0.45, Math.min(height * 0.45, next.y)),
+    x: Math.max(
+      -mapRect.available.width * 0.45,
+      Math.min(mapRect.available.width * 0.45, next.x),
+    ),
+    y: Math.max(
+      -mapRect.available.height * 0.45,
+      Math.min(mapRect.available.height * 0.45, next.y),
+    ),
   });
   const panResponder = useMemo(
     () =>
@@ -345,7 +385,7 @@ export function MapPreview({
         },
         onPanResponderTerminationRequest: () => false,
       }),
-    [height, width],
+    [height, width, mapRect.available.width, mapRect.available.height],
   );
   const handleWheel = (event: any) => {
     const delta = Number(event?.deltaY ?? event?.nativeEvent?.deltaY ?? 0);
@@ -366,7 +406,18 @@ export function MapPreview({
         clickTimeoutRef.current = undefined;
       }
     };
-  }, [route.id, route.revisionId, geometryKey, viewportKey]);
+  }, [
+    route.id,
+    route.revisionId,
+    geometryKey,
+    viewportKey,
+    width,
+    height,
+    mapRect.insets.top,
+    mapRect.insets.right,
+    mapRect.insets.bottom,
+    mapRect.insets.left,
+  ]);
   const centerOnUserLocation = () => {
     if (!showUserLocationControl || !hasFiniteCoordinate(userCoordinate)) return;
     setMapCenter({
@@ -387,8 +438,8 @@ export function MapPreview({
     if (!point) return;
     const coordinate = unproject(
       {
-        x: centerWorld.x + point.x - width / 2 - panRef.current.x,
-        y: centerWorld.y + point.y - height / 2 - panRef.current.y,
+        x: centerWorld.x + point.x - mapOrigin.x - panRef.current.x,
+        y: centerWorld.y + point.y - mapOrigin.y - panRef.current.y,
       },
       zoom,
     );
@@ -487,6 +538,20 @@ export function MapPreview({
   const accessiblePointLabels = pointLabels;
   const mapSummary = `${mapLabel}. ${statusLabel}.${compact ? "" : ` ${text.web}. ${routePointsLabel}: ${accessiblePointLabels.length ? accessiblePointLabels.join(". ") : rtl ? "لا توجد نقاط مسار." : "No route points."}`}`;
   const mapDetailsId = `map-details-${route.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  const handleLayout = (event: any) => {
+    const layout = event?.nativeEvent?.layout;
+    const next = {
+      width: Number(layout?.width),
+      height: Number(layout?.height),
+    };
+    if (!Number.isFinite(next.width) || !Number.isFinite(next.height)) return;
+    if (next.width <= 0 || next.height <= 0) return;
+    setMeasuredHostSize((current) =>
+      current?.width === next.width && current.height === next.height
+        ? current
+        : next,
+    );
+  };
   return (
     <View
       style={[
@@ -495,9 +560,9 @@ export function MapPreview({
         fullScreen && styles.fullScreen,
         rtl && styles.rtlContainer,
         rtl && ({ direction: "rtl" } as any),
-        { height, width },
       ]}
       accessibilityLabel={mapLabel}
+      onLayout={handleLayout}
     >
       <View
         testID="route-map"
@@ -679,7 +744,7 @@ export function MapPreview({
           accessibilityRole="text"
           accessibilityLabel={activeEndpointLabel}
           aria-live="polite"
-          style={styles.activeEndpointOverlay}
+          style={[styles.activeEndpointOverlay, { top: mapOrigin.y }]}
         >
           <View style={styles.activeEndpointCrosshair} />
           <View style={styles.activeEndpointBadge}>
@@ -814,7 +879,11 @@ export function MapPreview({
       )}
       {!compact && !minimal && (
         <View
-          style={[styles.legend, compact && styles.compactLegend]}
+          style={[
+            styles.legend,
+            compact && styles.compactLegend,
+            { bottom: Math.max(32, mapRect.insets.bottom + 8) },
+          ]}
           pointerEvents="none"
         >
           {(["dedicated", "mixed", "restricted", "unknown"] as RoadKind[]).map(
@@ -860,7 +929,13 @@ export function MapPreview({
       )}
       {!compact && !minimal && (
         <>
-          <View style={styles.mapFoot} pointerEvents="none">
+          <View
+            style={[
+              styles.mapFoot,
+              { bottom: Math.max(8, mapRect.insets.bottom + 8) },
+            ]}
+            pointerEvents="none"
+          >
             <Text
               style={[
                 styles.mapFootText,
@@ -873,7 +948,13 @@ export function MapPreview({
           </View>
         </>
       )}
-      <Text style={[styles.attribution, rtl && styles.arabicMeta]}>
+      <Text
+        style={[
+          styles.attribution,
+          rtl && styles.arabicMeta,
+          { bottom: Math.max(8, mapRect.insets.bottom + 8) },
+        ]}
+      >
         {tileAttribution}
       </Text>
       {!compact && !minimal && (
@@ -1008,14 +1089,23 @@ function toPosition(
   point: Coordinate,
   zoom: number,
   centerWorld: { x: number; y: number },
-  width: number,
-  height: number,
+  mapRect: MapAvailableRect,
   pan = { x: 0, y: 0 },
 ) {
   const projected = project(point, zoom);
   return {
-    x: width / 2 + projected.x - centerWorld.x + pan.x,
-    y: height / 2 + projected.y - centerWorld.y + pan.y,
+    x:
+      mapRect.insets.left +
+      mapRect.available.width / 2 +
+      projected.x -
+      centerWorld.x +
+      pan.x,
+    y:
+      mapRect.insets.top +
+      mapRect.available.height / 2 +
+      projected.y -
+      centerWorld.y +
+      pan.y,
   };
 }
 function fitZoom(points: Coordinate[], width: number, height: number) {
@@ -1054,7 +1144,9 @@ export const roadColor = (kind: RoadKind) => COLORS[kind];
 
 const styles = StyleSheet.create({
   container: {
-    height: 352,
+    width: "100%",
+    flex: 1,
+    minHeight: 240,
     borderRadius: 18,
     overflow: "hidden",
     backgroundColor: "#E9F0F0",
@@ -1065,8 +1157,8 @@ const styles = StyleSheet.create({
   // Direction is established on the web document; RN Web does not accept a
   // `direction` style property here.
   rtlContainer: {},
-  compact: { height: 248 },
-  fullScreen: { minHeight: 448 },
+  compact: { flex: 0, minHeight: 248 },
+  fullScreen: { flex: 1, minHeight: 240 },
   gestureLayer: {
     ...StyleSheet.absoluteFill,
     borderRadius: 16,
@@ -1374,7 +1466,7 @@ const styles = StyleSheet.create({
   mapFootText: { color: "#52666A", fontFamily: FONT_REGULAR, fontSize: 10 },
   attribution: {
     position: "absolute",
-    insetInlineEnd: 8,
+    insetInlineStart: 8,
     bottom: 8,
     color: "#52666A",
     fontFamily: FONT_REGULAR,
