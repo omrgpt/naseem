@@ -10,8 +10,7 @@ work is complete.
 - Repository: `C:\Users\PC\Documents\ChatGPT\Bike`
 - Active worktree: `C:\Users\PC\Documents\ChatGPT\Bike\.worktrees\naseem-release-fixes`
 - Branch: `codex/naseem-release-fixes`
-- Checkpoint HEAD: `eecb653` (checkpoint docs below are pending the next
-  checkpoint commit; update this value after committing them)
+- Checkpoint HEAD: `318304c`
 - Existing product commits through this checkpoint are durable in Git.
 - Existing dirty files are scratch/reports from the earlier hardening pass;
   preserve them unless the user explicitly asks to clean them.
