@@ -352,6 +352,12 @@ test("manual sketch review keeps the explicit mapped-road check and draft copy",
   assert.match(appSource, /const checkManualRoads = async/);
   assert.match(appSource, /createManualSketchMatchArtifact/);
   assert.match(appSource, /manualRawArtifact/);
+  const failedHandling = sourceBetween(
+    "const checkManualRoads = async",
+    "const manualRecordForDecision",
+  );
+  assert.match(failedHandling, /setManualMatchError\(t\.routeMatchFailure\)/);
+  assert.doesNotMatch(failedHandling, /manualRoadCheckFailed/);
   assert.match(routesScreenSource, /Check against mapped roads/);
   assert.match(routesScreenSource, /تحقق من الطرق المرسومة/);
   assert.match(routesScreenSource, /manualMatchStatus/);

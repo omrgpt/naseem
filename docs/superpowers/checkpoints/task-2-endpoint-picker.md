@@ -30,6 +30,15 @@ Status: `IN PROGRESS`
   were not yet implemented. The runtime integration test failed first because
   `preparePlannerMatch` was not exported.
 
+## Verification follow-up RED evidence
+
+- Browser smoke exposed an Arabic road-check failure message rendered in
+  English. Focused assertion command:
+  `npx.cmd tsx --test src/appIntegration.test.ts`
+- Result: **RED** — 18 tests executed, 17 passed, 1 failed because the manual
+  failure branch still used the English `manualRoadCheckFailed` fallback
+  instead of the localized `t.routeMatchFailure` copy.
+
 ## Worktree and branch
 
 - Worktree: `C:\\Users\\PC\\Documents\\ChatGPT\\Bike\\.worktrees\\naseem-release-fixes`

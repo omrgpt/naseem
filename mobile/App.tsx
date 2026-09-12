@@ -1741,12 +1741,7 @@ export default function App() {
     updateWorkingRecord(failed.route);
     setManualMatchedRecord(null);
     setManualMatchStatus("failed");
-    setManualMatchError(
-      uiText(
-        "manualRoadCheckFailed",
-        "We couldn't match this sketch to mapped roads. Your sketch is still here.",
-      ),
-    );
+    setManualMatchError(t.routeMatchFailure);
   };
   const manualRecordForDecision = () =>
     manualMatchStatus === "ready" && manualMatchedRecord
