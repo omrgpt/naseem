@@ -91,7 +91,7 @@ so it has been sent back to the canonical worktree and is not yet accepted.
 | Home/Plan | `01a092e9-beed-7650-b317-e2398fac83f8` | first-use flow audit |
 | Live Ride | `01a092e9-bfe9-76a0-900d-6c21624ec4b3` | **complete; see `live-ride-audit.md`** |
 | Arabic/RTL | `01a092e9-c104-7d43-903e-e8bd2977d813` | bilingual layout/copy audit |
-| Accessibility | `01a092f7-eeaf-7dc1-b21e-449b76401312` | rerun requested against canonical worktree |
+| Accessibility | `01a092f7-eeaf-7dc1-b21e-449b76401312` | **complete; see `accessibility-audit.md`** |
 
 The previous persona/reviewer batch did not yield feedback: the agents became
 unavailable after usage-limit errors. Their absence is not evidence that the
