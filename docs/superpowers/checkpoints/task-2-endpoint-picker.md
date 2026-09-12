@@ -1,51 +1,69 @@
 # Task 2 — Real endpoint picker and manual sketch road-check state
 
-Status: `IN PROGRESS`
+Status: `COMPLETE`
 
 ## Worktree and branch
 
-- Worktree: `C:\Users\PC\Documents\ChatGPT\Bike\.worktrees\naseem-release-fixes`
+- Worktree: `C:\\Users\\PC\\Documents\\ChatGPT\\Bike\\.worktrees\\naseem-release-fixes`
 - Branch: `codex/naseem-release-fixes`
-- Starting HEAD: `3e359f6`
+- Pre-implementation HEAD: `f9f87fd`
+- Implementation commit: `77cad24 feat(naseem): add real endpoint and sketch road checks`
+- Documentation finalization commit: pending hash verification below
 
-## Owned files
+## Owned files changed
 
 - `mobile/App.tsx`
 - `mobile/src/screens/RoutesScreen.tsx`
 - `mobile/src/routeBuilder.ts`
-- `mobile/src/routeLifecycle.ts` only if the existing transition seam requires it
 - `mobile/src/routeBuilder.test.ts`
 - `mobile/src/appIntegration.test.ts`
-- `.superpowers/sdd/2026-09-12-release-continuation/task-2-report.md`
-- This checkpoint file
+- This checkpoint
 
-Task 1 map sizing files and all unrelated dirty/untracked files are explicitly
-out of scope and must remain untouched.
+`mobile/src/routeLifecycle.ts` was inspected and not changed: the existing
+`beginRouteMatching`, `routeMatchingSucceeded`, and `routeMatchingFailed` seam
+was sufficient. Task 1 map-sizing files, unrelated dirty files, and unrelated
+untracked files were not staged or changed.
 
-## Intended tests
+## Delivered behavior
 
-- Focused route-builder and app-integration tests for real-map endpoint
-  selection, typed-vs-committed points, two-endpoint validation, explicit
-  road-check success/failure, sketch retention, and whole-stroke undo.
-- Full mobile test suite.
-- Mobile typecheck.
-- `git diff --check`.
-- Phone and Arabic/RTL editor checks through browser/CUA without granting
-  location; no native-runtime claim.
+- Replaced the builder's `EmptyBuilderMap` with the existing real map renderer.
+  Editor mode shows the active endpoint/crosshair, selected-point summary, and
+  explicit confirmation; it never requests location.
+- Kept manual/freehand input as an explicit draft/preview with whole-stroke
+  undo/redo state and raw-sketch retention.
+- Added “Check against mapped roads” through canonical
+  `beginRouteMatching`, with authoritative `road_matched/ready` only after a
+  successful routed response. Failure retains the sketch and records
+  `waypoint_trace/unavailable` recovery state.
+- Kept “Use as a non-navigation plan”, “Save locally”, “Edit”, and “Discard”
+  as separate decisions. Use does not navigate; Save stores the current draft
+  or matched record locally.
+- Preserved intermediate planner points through Add stop/Edit and simplified
+  only the routing payload, preserving raw manual points and endpoints.
 
-## Resume step
+## Verification evidence
 
-Inspect the existing route-builder/App seams, add the required failing tests,
-run the focused RED command and record its exact result, then implement the
-smallest production changes that make the tests pass.
+- TDD RED: `npx.cmd tsx --test src/routeBuilder.test.ts src/appIntegration.test.ts`
+  — 28 tests, 21 passed, 7 failed before implementation.
+- Focused GREEN: same command — 28 tests, 28 passed, 0 failed.
+- Full mobile suite: `npm.cmd test` — 248 tests, 248 passed, 0 failed.
+- Typecheck: `npm.cmd run typecheck` — passed (`tsc --noEmit`, exit 0).
+- Diff check: `git diff --check` — passed (exit 0; only normal LF/CRLF
+  conversion warnings).
+- Browser/CUA phone-sized check used the Expo web surface at
+  `http://localhost:8083/` with a 390×844 viewport. English and Arabic/RTL
+  endpoint editing showed the real map, active crosshair, selected coordinate,
+  confirmation controls, and Arabic manual road-check copy. No location
+  permission was granted and no native-runtime result is claimed.
 
-## RED evidence
+## Concerns and resume step
 
-- Test additions: `mobile/src/routeBuilder.test.ts` and
-  `mobile/src/appIntegration.test.ts`.
-- Focused command: `npx.cmd tsx --test src/routeBuilder.test.ts src/appIntegration.test.ts`
-- Result: **RED** — 28 tests executed, 21 passed, 7 failed.
-- Expected missing behaviors: real editor map (`EmptyBuilderMap` still
-  present), explicit manual road-check lifecycle and draft-only decision
-  state, preserved planner intermediate points, explicit draft metadata on
-  manual plans, freehand routing simplification, and whole-stroke undo/redo.
+- A real routed-road success was not claimed from the browser smoke check;
+  provider/network failure remains a supported path and preserves the raw
+  sketch. Native-device validation is still a future step.
+- Manual map placements currently form one-point strokes; the stroke seam is
+  explicit and undo removes a complete stroke. Native drag/stylus behavior was
+  not claimed.
+- Resume by running the Expo SDK 57 app on an actual phone, exercising both
+  mapped-road success and failure retention, then continue with the next
+  release-continuation task.
