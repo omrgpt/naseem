@@ -10,7 +10,7 @@ work is complete.
 - Repository: `C:\Users\PC\Documents\ChatGPT\Bike`
 - Active worktree: `C:\Users\PC\Documents\ChatGPT\Bike\.worktrees\naseem-release-fixes`
 - Branch: `codex/naseem-release-fixes`
-- Checkpoint HEAD before this document update: `3e359f6`
+- Checkpoint HEAD before this document update: `c011476`
 - Existing product commits through this checkpoint are durable in Git.
 - Existing dirty files are scratch/reports from the earlier hardening pass;
   preserve them unless the user explicitly asks to clean them.
@@ -106,14 +106,17 @@ expected-vs-actual, severity, and feature-request feedback.
 Current continuation agents:
 
 - Task 1 implementation: Parfit completed with `becaff3` and `3e359f6`; its
-  product files are clean. Bernoulli (`01a095ca-cf7b-78f2-a2bb-a67c75b9c8d6`)
-  is performing the required independent read-only review and has not returned
-  a terminal verdict yet.
-- Task 2 endpoint/sketch implementation: Cicero
-  (`01a095d5-a291-7fd3-98b7-9229063fc01e`) is active. Its IN PROGRESS
-  checkpoint is `docs/superpowers/checkpoints/task-2-endpoint-picker.md`.
-  It owns only the App/Routes/builder/lifecycle and focused-test files listed in
-  the Task 2 brief.
+  product files are clean. Bernoulli completed the independent review with no
+  Critical/Important Task 1 findings; its report is
+  `.superpowers/sdd/2026-09-12-release-continuation/task-1-review-report.md`.
+- Task 2 endpoint/sketch implementation: Cicero completed with `77cad24`,
+  `f731485`, `13c9fbd`, and `c011476`; its product files are clean. Euclid
+  (`01a09604-5ce1-7681-a82c-ac2a3dcebdbf`) is performing the required
+  independent read-only review. Its report/checkpoint are not terminal yet.
+- Task 4 Live Ride implementation: Copernicus
+  (`01a09604-5d9d-71e1-a72a-7de12bb030b8`) is active in the disjoint
+  LiveRide/matcher/recording scope. Its IN PROGRESS checkpoint is
+  `docs/superpowers/checkpoints/task-4-live-ride.md`.
 
 ## Resume checklist
 
