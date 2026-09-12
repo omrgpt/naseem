@@ -25,6 +25,17 @@ work is complete.
   available; browser automation later reported that no browser surface was
   available, so rendered QA must be retried rather than assumed.
 
+## Rendered evidence observed after restart
+
+At `390x844` in the local browser, the Plan screen is full-width, but the
+initial route flow places a large NBH preview before the builder and the fixed
+bottom navigation covers the lower map/action area. Entering the manual flow
+shows only a “Choose on map” placeholder and the point-count controls; it does
+not show a real map or a pencil/stroke interaction. At the default desktop
+viewport, the visible route is a coarse dashed chord and the map dominates the
+viewport before the user reaches the useful actions. These observations are
+from the live DOM/screenshot, not inferred from tests.
+
 ## Current redesign scope
 
 The goal is a people-first, phone-first experience: a full-bleed map for
