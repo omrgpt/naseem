@@ -10,7 +10,8 @@ work is complete.
 - Repository: `C:\Users\PC\Documents\ChatGPT\Bike`
 - Active worktree: `C:\Users\PC\Documents\ChatGPT\Bike\.worktrees\naseem-release-fixes`
 - Branch: `codex/naseem-release-fixes`
-- Checkpoint HEAD: `eecb653`
+- Checkpoint HEAD: `eecb653` (checkpoint docs below are pending the next
+  checkpoint commit; update this value after committing them)
 - Existing product commits through this checkpoint are durable in Git.
 - Existing dirty files are scratch/reports from the earlier hardening pass;
   preserve them unless the user explicitly asks to clean them.
@@ -77,19 +78,21 @@ sidebar notification or a usage-limit banner.
 
 ## Agent status at checkpoint
 
-Five original read-only audit agents remain active. Descartes completed and
-its findings are saved in `map-drawing-audit.md`; its slot was then reused for
-Kierkegaard's accessibility audit:
+The audit batch is being kept open until each response is validated against the
+canonical worktree and its report is saved. Descartes completed and its
+findings are saved in `map-drawing-audit.md`. Curie's corrected response is
+saved in `route-builder-audit.md`. Kierkegaard's first response used `master`,
+so it has been sent back to the canonical worktree and is not yet accepted.
 
 | Scope | Agent id | Expected durable output |
 | --- | --- | --- |
 | Map drawing | `01a092e9-bc42-7ee1-8ccd-e0b601535d68` | **complete; see `map-drawing-audit.md`** |
 | Map visual | `01a092e9-bd05-76b2-90f0-1eb23383211f` | map visual/responsive audit |
-| Route builder | `01a092e9-bdf7-7e53-9cc7-ac09b78cff32` | geometry/model audit |
+| Route builder | `01a092e9-bdf7-7e53-9cc7-ac09b78cff32` | **complete; see `route-builder-audit.md`** |
 | Home/Plan | `01a092e9-beed-7650-b317-e2398fac83f8` | first-use flow audit |
 | Live Ride | `01a092e9-bfe9-76a0-900d-6c21624ec4b3` | live/recovery audit |
 | Arabic/RTL | `01a092e9-c104-7d43-903e-e8bd2977d813` | bilingual layout/copy audit |
-| Accessibility | `01a092f7-eeaf-7dc1-b21e-449b76401312` | interaction/accessibility audit |
+| Accessibility | `01a092f7-eeaf-7dc1-b21e-449b76401312` | rerun requested against canonical worktree |
 
 The previous persona/reviewer batch did not yield feedback: the agents became
 unavailable after usage-limit errors. Their absence is not evidence that the
