@@ -979,6 +979,7 @@ export function useLiveRideSession({
       activeRoute: undefined,
       pause: undefined,
       resume: undefined,
+      retryLocation: undefined,
     }));
     setState(transitionLiveRideState(state, "completed"));
     setStatusMessage(recordingOnly ? recordingEndedMessage : liveEndedMessage);
