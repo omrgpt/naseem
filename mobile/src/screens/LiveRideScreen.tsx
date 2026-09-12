@@ -136,6 +136,13 @@ export function LiveRideScreen({
     locationState === "stale" || locationState === "away";
   const recordingLabels = recordingOnlyLabels(rtl);
   const controlLabels = recordingControlLabels(rtl);
+  const recordingPausedCopy = screenText(
+    t,
+    "recordingPaused",
+    rtl
+      ? "تم إيقاف التسجيل مؤقتاً. استأنفه عندما تكون مستعداً للمتابعة."
+      : "Recording paused. Resume when you are ready to continue.",
+  );
   const completionState = viewCompletionDraft
     ? completionStateForDraft(viewCompletionDraft)
     : null;
@@ -680,11 +687,7 @@ export function LiveRideScreen({
               </Text>
               {position?.isPaused && (
                 <Text style={[styles.alertText, rtl && styles.textRight]}>
-                  {screenText(
-                    t,
-                    "recordingPaused",
-                    "Recording paused. Resume when you are ready to continue.",
-                  )}
+                  {recordingPausedCopy}
                 </Text>
               )}
             </ScrollView>
@@ -888,18 +891,14 @@ export function LiveRideScreen({
                 {screenText(t, "liveRecoveryCopy", recoveryLabels.recovery)}
               </Text>
               <Text style={[styles.fieldHint, rtl && styles.textRight]}>
-                {screenText(t, "lastFix", "Last fix")}:{" "}
+                {recoveryLabels.lastFix}:{" "}
                 {position?.lastFixLabel ?? recoveryLabels.noFix}
               </Text>
             </View>
           )}
           {position?.isPaused && !needsLocationRecovery && (
               <Text style={[styles.alertText, rtl && styles.textRight]}>
-                {screenText(
-                  t,
-                  "recordingPaused",
-                  "Recording paused. Resume when you are ready to continue.",
-                )}
+                {recordingPausedCopy}
               </Text>
             )}
           </ScrollView>
