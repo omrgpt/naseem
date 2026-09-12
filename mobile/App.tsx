@@ -56,18 +56,29 @@ import {
 import { buildRouteLayers } from "./src/routeConditions";
 import {
   appendManualStroke,
+  beginManualMatchSession,
+  createManualMatchSession,
+  createManualSketchMatchArtifact,
   clearManualSketch,
   createManualSketchState,
+  createPlannerInputState,
   draftRouteFromCoordinates,
+  finishManualMatchSession,
+  invalidateManualMatchSession,
   manualSketchCoordinates,
+  manualMatchSessionIsCurrent,
+  moveManualPointInSketch,
   parseGpxDetailed,
+  preparePlannerMatch,
   redoManualStroke,
+  removeManualPointFromSketch,
   routeFromCoordinates,
   plannerValidationMessage,
-  simplifyCoordinatesForRouting,
   undoManualStroke,
+  updatePlannerTextState,
   validatePlannerEndpoints,
   validateRouteCoordinates,
+  type ManualMatchSession,
   type ManualSketchState,
 } from "./src/routeBuilder";
 import {
@@ -364,6 +375,8 @@ export default function App() {
     useState<ManualMatchStatus>("draft");
   const [manualMatchedRecord, setManualMatchedRecord] =
     useState<RouteRecord | null>(null);
+  const [manualRawArtifact, setManualRawArtifact] =
+    useState<RouteRecord | null>(null);
   const [manualMatchError, setManualMatchError] = useState("");
   const [importReview, setImportReview] = useState<RoutePlan | null>(null);
   const [importReviewFileName, setImportReviewFileName] = useState("");
@@ -388,6 +401,20 @@ export default function App() {
   const [recordingOnlyRide, setRecordingOnlyRide] = useState(false);
   const [stravaMessage, setStravaMessage] = useState("");
   const matchingToken = useRef(0);
+  const manualMatchSession = useRef<ManualMatchSession>(
+    createManualMatchSession(),
+  );
+  const invalidateManualMatch = () => {
+    manualMatchSession.current = invalidateManualMatchSession(
+      manualMatchSession.current,
+      manualSketchCoordinates(manualSketch),
+    );
+    matchingToken.current += 1;
+    setManualMatchedRecord(null);
+    setManualRawArtifact(null);
+    setManualMatchStatus("draft");
+    setManualMatchError("");
+  };
   const generationIndex = useRef(0);
   const lastGeneratedAt = useRef(0);
   const dataDeletionGeneration = useRef(0);
@@ -1093,23 +1120,38 @@ export default function App() {
     field: "start" | "destination",
     name?: string,
     nameAr?: string,
-  ) => ({
-    ...coordinate,
-    name: name || (field === "start" ? "Start" : "Destination"),
-    nameAr: nameAr || name || (field === "start" ? "البداية" : "الوجهة"),
-  });
+  ) => {
+    const defaultName = field === "start" ? "Start" : "Destination";
+    const defaultNameAr = field === "start" ? "البداية" : "الوجهة";
+    return {
+      ...coordinate,
+      name: name || defaultName,
+      nameAr: nameAr || defaultNameAr,
+    };
+  };
   const matchPlanner = async (
     start: BuilderRouteState["start"],
     destination: BuilderRouteState["destination"],
     orderedPoints: PlannerPoint[] = [start, destination].filter(
       (point): point is PlannerPoint => Boolean(point),
     ),
+    textOverrides: {
+      startText?: string;
+      destinationText?: string;
+    } = {},
   ) => {
     const token = ++matchingToken.current;
     if (!start || !destination) return;
-    const endpointError = validatePlannerEndpoints(start, destination);
-    if (endpointError) {
-      const message = plannerValidationMessage(endpointError, language);
+    const prepared = preparePlannerMatch(
+      {
+        ...createPlannerInputState(start, destination),
+        startText: textOverrides.startText ?? startText,
+        destinationText: textOverrides.destinationText ?? destinationText,
+      },
+      orderedPoints,
+    );
+    if (!prepared.ok) {
+      const message = plannerValidationMessage(prepared.error, language);
       setRouteMessage(message);
       setBuilder((current) => ({
         ...current,
@@ -1123,8 +1165,8 @@ export default function App() {
     }
     const plan = routeFromCoordinates(
       `planned-${Date.now()}`,
-      `${start.name} → ${destination.name}`,
-      orderedPoints,
+      `${prepared.start.name} → ${prepared.destination.name}`,
+      prepared.points,
       "Naseem planner",
     );
     if (!plan) {
@@ -1226,8 +1268,18 @@ export default function App() {
             ? [nextDestination]
             : [];
     const endpointError = validatePlannerEndpoints(nextStart, nextDestination);
-    if (field === "start") setStartText(nextPoint.name);
-    else setDestinationText(nextPoint.name);
+    const nextStartText = nextStart
+      ? language === "ar"
+        ? nextStart.nameAr ?? nextStart.name
+        : nextStart.name
+      : "";
+    const nextDestinationText = nextDestination
+      ? language === "ar"
+        ? nextDestination.nameAr ?? nextDestination.name
+        : nextDestination.name
+      : "";
+    if (field === "start") setStartText(nextStartText);
+    else setDestinationText(nextDestinationText);
     setPlannerPoints(nextPlannerPoints);
     setAddingPlannerStop(false);
     if (endpointError === "sameEndpoints") {
@@ -1256,7 +1308,10 @@ export default function App() {
         route: null,
       });
     else if (nextStart && nextDestination)
-      void matchPlanner(nextStart, nextDestination, nextPlannerPoints);
+      void matchPlanner(nextStart, nextDestination, nextPlannerPoints, {
+        startText: nextStartText,
+        destinationText: nextDestinationText,
+      });
     else
       setBuilder({
         status: "start-selected",
@@ -1266,14 +1321,18 @@ export default function App() {
       });
   };
   const updatePlannerText = (field: "start" | "destination", value: string) => {
-    if (field === "start") setStartText(value);
-    else setDestinationText(value);
+    const currentInput = {
+      ...createPlannerInputState(builder.start, builder.destination),
+      startText,
+      destinationText,
+    };
+    const nextInput = updatePlannerTextState(currentInput, field, value);
+    if (field === "start") setStartText(nextInput.startText);
+    else setDestinationText(nextInput.destinationText);
     matchingToken.current += 1;
-    const start =
-      field === "start" && !value.trim() ? null : builder.start;
-    const destination =
-      field === "destination" && !value.trim() ? null : builder.destination;
-    if (!start && !destination) setPlannerPoints([]);
+    const start = nextInput.start;
+    const destination = nextInput.destination;
+    if (!start || !destination) setPlannerPoints([]);
     setBuilder({
       status: start ? "start-selected" : "empty",
       start,
@@ -1285,10 +1344,8 @@ export default function App() {
   };
   const mapPlannerPress = (coordinate: Coordinate) => {
     if (manualMode) {
+      invalidateManualMatch();
       setManualSketch((current) => appendManualStroke(current, [coordinate]));
-      setManualMatchedRecord(null);
-      setManualMatchStatus("draft");
-      setManualMatchError("");
       return;
     }
     if (addingPlannerStop && builder.start && builder.destination) {
@@ -1323,6 +1380,14 @@ export default function App() {
         field === "start" ? "Map start" : "Map destination",
       ),
     );
+  };
+  const beginManualStroke = () => {
+    if (manualMode) invalidateManualMatch();
+  };
+  const mapPlannerStroke = (stroke: Coordinate[]) => {
+    if (!manualMode || !stroke.length) return;
+    invalidateManualMatch();
+    setManualSketch((current) => appendManualStroke(current, stroke));
   };
   const useCurrentLocation = async (field: "start" | "destination") => {
     const reportLocationFailure = (message: string) => {
@@ -1465,11 +1530,20 @@ export default function App() {
     const stops =
       plannerPoints.length > 2 ? [...plannerPoints.slice(1, -1)].reverse() : [];
     const reversedPoints = [start, ...stops, destination];
-    setStartText(start.name);
-    setDestinationText(destination.name);
+    setStartText(language === "ar" ? start.nameAr ?? start.name : start.name);
+    setDestinationText(
+      language === "ar" ? destination.nameAr ?? destination.name : destination.name,
+    );
     setPlannerPoints(reversedPoints);
     setActiveField(null);
-    void matchPlanner(start, destination, reversedPoints);
+    void matchPlanner(start, destination, reversedPoints, {
+      startText:
+        language === "ar" ? start.nameAr ?? start.name : start.name,
+      destinationText:
+        language === "ar"
+          ? destination.nameAr ?? destination.name
+          : destination.name,
+    });
   };
   const addPlannerStop = () => {
     if (!builder.start || !builder.destination) {
@@ -1536,44 +1610,35 @@ export default function App() {
           : null,
     [manualDraftRecord, manualMatchStatus, manualMatchedRecord],
   );
-  const resetManualMatch = () => {
-    setManualMatchedRecord(null);
-    setManualMatchStatus("draft");
-    setManualMatchError("");
-  };
   const resetManualSketch = () => {
     setManualSketch(createManualSketchState());
-    resetManualMatch();
+    invalidateManualMatch();
   };
   const openManual = () => {
-    matchingToken.current += 1;
     setManualMode(true);
     resetManualSketch();
     setRouteMessage("");
   };
   const cancelManual = () => {
-    matchingToken.current += 1;
     setManualMode(false);
     resetManualSketch();
   };
   const undoManual = () => {
     if (!manualSketch.strokes.length) return;
-    matchingToken.current += 1;
+    invalidateManualMatch();
     setManualSketch((current) => undoManualStroke(current));
-    resetManualMatch();
   };
   const redoManual = () => {
     if (!manualSketch.redo.length) return;
-    matchingToken.current += 1;
+    invalidateManualMatch();
     setManualSketch((current) => redoManualStroke(current));
-    resetManualMatch();
   };
   const clearManual = () => {
-    matchingToken.current += 1;
+    invalidateManualMatch();
     setManualSketch((current) => clearManualSketch(current));
-    resetManualMatch();
   };
   const doneManual = () => {
+    if (manualMatchStatus === "matching") invalidateManualMatch();
     setManualMode(false);
     setRouteMessage(
       manualMatchStatus === "ready"
@@ -1590,15 +1655,25 @@ export default function App() {
       setManualMatchError(t.drawMore);
       return;
     }
+    const artifact = createManualSketchMatchArtifact(manualPoints);
+    const rawArtifact = manualDraftRecord;
+    const session = beginManualMatchSession(
+      manualMatchSession.current,
+      artifact.rawPoints,
+      artifact.routingPoints,
+    );
+    manualMatchSession.current = session;
     const token = ++matchingToken.current;
-    const routingPoints = simplifyCoordinatesForRouting(manualPoints);
+    setManualRawArtifact(rawArtifact);
     const routingPlan = draftRouteFromCoordinates(
       `drawn-match-${Date.now()}`,
       language === "ar" ? "مسار مرسوم" : "Drawn route",
-      routingPoints,
+      artifact.routingPoints,
       language === "ar" ? "مرسوم على الجهاز" : "Drawn on device",
     );
     if (!routingPlan) {
+      manualMatchSession.current =
+        finishManualMatchSession(session, session.revision, "failed") ?? session;
       setManualMatchStatus("failed");
       setManualMatchError(t.routeMatchFailure);
       return;
@@ -1617,6 +1692,8 @@ export default function App() {
     const matching = beginRouteMatching(draftRecord);
     if (matching.state !== "matching") {
       if ("route" in matching) updateWorkingRecord(matching.route);
+      manualMatchSession.current =
+        finishManualMatchSession(session, session.revision, "failed") ?? session;
       setManualMatchedRecord(null);
       setManualMatchStatus("failed");
       setManualMatchError(t.routeMatchFailure);
@@ -1628,10 +1705,21 @@ export default function App() {
     const result = await resolveRoadGeometryDetailed(
       routePlanFromRecord(matching.route),
     );
-    if (token !== matchingToken.current) return;
+    if (
+      token !== matchingToken.current ||
+      !manualMatchSessionIsCurrent(manualMatchSession.current, session.revision)
+    )
+      return;
     if (result.ok) {
       const ready = routeMatchingSucceeded(matching.route, result.route);
       if (ready.state === "trace-ready") {
+        const finished = finishManualMatchSession(
+          manualMatchSession.current,
+          session.revision,
+          "ready",
+        );
+        if (!finished) return;
+        manualMatchSession.current = finished;
         updateWorkingRecord(ready.route);
         setManualMatchedRecord(ready.route);
         setManualMatchStatus("ready");
@@ -1643,6 +1731,13 @@ export default function App() {
       matching.route,
       result.ok ? "invalidResponse" : result.reason,
     );
+    const finished = finishManualMatchSession(
+      manualMatchSession.current,
+      session.revision,
+      "failed",
+    );
+    if (!finished) return;
+    manualMatchSession.current = finished;
     updateWorkingRecord(failed.route);
     setManualMatchedRecord(null);
     setManualMatchStatus("failed");
@@ -1656,13 +1751,14 @@ export default function App() {
   const manualRecordForDecision = () =>
     manualMatchStatus === "ready" && manualMatchedRecord
       ? manualMatchedRecord
-      : manualDraftRecord;
+      : manualRawArtifact ?? manualDraftRecord;
   const useManualRoute = () => {
     const record = manualRecordForDecision();
     if (!record) {
       setRouteMessage(t.drawMore);
       return;
     }
+    if (manualMatchStatus === "matching") invalidateManualMatch();
     updateWorkingRecord(record);
     setManualMode(false);
     setRouteMessage("");
@@ -1672,11 +1768,12 @@ export default function App() {
     setTab("plan");
   };
   const saveManualRoute = () => {
-    const record = manualRecordForDecision();
+    const record = manualRawArtifact ?? manualDraftRecord;
     if (!record) {
       setRouteMessage(t.drawMore);
       return;
     }
+    if (manualMatchStatus === "matching") invalidateManualMatch();
     saveRecord(record);
     setManualMode(false);
     setRouteMessage(t.routeSaved);
@@ -1696,31 +1793,16 @@ export default function App() {
     setRouteMessage("");
   };
   const removeManualPoint = (index: number) => {
-    matchingToken.current += 1;
+    invalidateManualMatch();
     setManualSketch((current) => {
-      const points = manualSketchCoordinates(current).filter(
-        (_, currentIndex) => currentIndex !== index,
-      );
-      return createManualSketchState(points.length ? [points] : []);
+      return removeManualPointFromSketch(current, index);
     });
-    resetManualMatch();
   };
   const moveManualPoint = (index: number, direction: -1 | 1) => {
-    matchingToken.current += 1;
-    setManualSketch((current) => {
-      const points = manualSketchCoordinates(current);
-      const target = index + direction;
-      if (
-        index < 0 ||
-        index >= points.length ||
-        target < 0 ||
-        target >= points.length
-      ) return current;
-      const next = [...points];
-      [next[index], next[target]] = [next[target], next[index]];
-      return createManualSketchState([next]);
-    });
-    resetManualMatch();
+    invalidateManualMatch();
+    setManualSketch((current) =>
+      moveManualPointInSketch(current, index, direction),
+    );
   };
 
   const importGpx = async () => {
@@ -2001,8 +2083,10 @@ export default function App() {
     setPlannerPoints([start, ...intermediatePoints, destination]);
     setAddingPlannerStop(false);
     setBuilder({ status: "start-selected", start, destination, route: null });
-    setStartText(start.name);
-    setDestinationText(destination.name);
+    setStartText(language === "ar" ? start.nameAr ?? start.name : start.name);
+    setDestinationText(
+      language === "ar" ? destination.nameAr ?? destination.name : destination.name,
+    );
     setActiveField("destination");
     setDetailRouteId(null);
     setTab("plan");
@@ -2056,8 +2140,10 @@ export default function App() {
       destination,
       route: viewForRecord(reversed, language),
     });
-    setStartText(start.name);
-    setDestinationText(destination.name);
+    setStartText(language === "ar" ? start.nameAr ?? start.name : start.name);
+    setDestinationText(
+      language === "ar" ? destination.nameAr ?? destination.name : destination.name,
+    );
     setActiveField("destination");
     setDetailRouteId(null);
     setTab("plan");
@@ -2983,7 +3069,11 @@ export default function App() {
       manualRoute={manualRoute}
       manualPoints={manualPoints}
       manualReview={
-        manualMatchedRecord ? viewForRecord(manualMatchedRecord, language) : null
+        manualRawArtifact
+          ? viewForRecord(manualRawArtifact, language)
+          : manualMatchedRecord
+            ? viewForRecord(manualMatchedRecord, language)
+            : null
       }
       manualMatchStatus={manualMatchStatus}
       manualMatchError={manualMatchError}
@@ -3020,6 +3110,8 @@ export default function App() {
       onUseCurrentLocation={(field) => void useCurrentLocation(field)}
       onUseSavedPoint={choosePlannerPoint}
       onMapPress={mapPlannerPress}
+      onMapStroke={mapPlannerStroke}
+      onManualStrokeStart={beginManualStroke}
       onRetryMatch={retryPlannerMatch}
       onEditPoints={editPlannerPoints}
       onUseMatchedRoute={useMatchedRoute}

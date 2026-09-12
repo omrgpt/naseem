@@ -6,10 +6,17 @@ import { NoticeAlert, StatusBadge } from "../UiPatterns";
 import type { Coordinate, RoutePlan } from "../domain";
 import {
   draftRouteFromCoordinates,
+  beginManualStrokeCapture,
+  cancelManualStrokeCapture,
+  coordinateFromMapSurface,
+  endManualStrokeCapture,
+  extendManualStrokeCapture,
   plannerValidationMessage,
   validatePlannerEndpoints,
+  type ManualStrokeCaptureState,
   type PlannerField,
 } from "../routeBuilder";
+import { mapDisplayBounds } from "../mapPreviewContract";
 import {
   asCanonicalRoute,
   routeChipFor,
@@ -42,6 +49,7 @@ export type RoutesMapText = {
   statusMatched?: string;
   statusLoading?: string;
   statusPilot?: string;
+  mapHint?: string;
   tilesUnavailable?: string;
 };
 
@@ -83,6 +91,8 @@ export type RoutesScreenProps = ScreenBaseProps & {
     point: PlannerPoint,
   ) => void;
   onMapPress: (coordinate: Coordinate) => void;
+  onMapStroke?: (stroke: Coordinate[]) => void;
+  onManualStrokeStart?: () => void;
   onRetryMatch: () => void;
   onEditPoints: () => void;
   onUseMatchedRoute: () => void;
@@ -153,6 +163,8 @@ export function RoutesScreen({
   onUseCurrentLocation,
   onUseSavedPoint,
   onMapPress,
+  onMapStroke,
+  onManualStrokeStart,
   onRetryMatch,
   onEditPoints,
   onUseMatchedRoute,
@@ -196,6 +208,11 @@ export function RoutesScreen({
     "pending" | "use" | "save" | "edit"
   >("pending");
   const destinationRef = useRef<TextInput>(null);
+  const [manualMapSize, setManualMapSize] = useState({ width: 0, height: 0 });
+  const manualStrokeRef = useRef<ManualStrokeCaptureState>({
+    active: false,
+    points: [],
+  });
   const preview = manualMode ? manualRoute : builderPreview;
   const editorMapRoute = useMemo(() => {
     const points = [
@@ -222,6 +239,15 @@ export function RoutesScreen({
         : [{ latitude: 26.18, longitude: 50.53 }],
       rtl ? "رسم على الخريطة" : "Drawn on device",
     );
+  const manualMapBounds = useMemo(
+    () =>
+      mapDisplayBounds(
+        manualMapRoute?.geometry && manualMapRoute.geometry.length >= 2
+          ? manualMapRoute.geometry
+          : manualMapRoute?.points ?? [],
+      ),
+    [manualMapRoute],
+  );
   const retainedManualRoute =
     manualReview ??
     completedManualRoute ??
@@ -297,6 +323,80 @@ export function RoutesScreen({
     setPlannerValidation(null);
     setPendingMapPoint({ field: mapPickerField, coordinate });
   };
+  const manualMapPointFromEvent = (event: any) => {
+    const native = event?.nativeEvent ?? {};
+    const rect = event?.currentTarget?.getBoundingClientRect?.();
+    const clientX = Number(native.clientX ?? event?.clientX);
+    const clientY = Number(native.clientY ?? event?.clientY);
+    const fallbackX =
+      rect && Number.isFinite(clientX) ? clientX - rect.left : Number.NaN;
+    const fallbackY =
+      rect && Number.isFinite(clientY) ? clientY - rect.top : Number.NaN;
+    const x = Number.isFinite(native.locationX)
+      ? native.locationX
+      : Number.isFinite(native.offsetX)
+        ? native.offsetX
+        : fallbackX;
+    const y = Number.isFinite(native.locationY)
+      ? native.locationY
+      : Number.isFinite(native.offsetY)
+        ? native.offsetY
+        : fallbackY;
+    return coordinateFromMapSurface(
+      { x, y },
+      {
+        width: manualMapSize.width || 320,
+        height: manualMapSize.height || 240,
+      },
+      manualMapBounds,
+    );
+  };
+  const handleManualStrokeStart = (event: any) => {
+    if (manualStrokeRef.current.active) return;
+    const coordinate = manualMapPointFromEvent(event);
+    if (!coordinate) return;
+    event.preventDefault?.();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    manualStrokeRef.current = beginManualStrokeCapture(coordinate);
+    onManualStrokeStart?.();
+  };
+  const handleManualStrokeMove = (event: any) => {
+    if (!manualStrokeRef.current.active) return;
+    const coordinate = manualMapPointFromEvent(event);
+    if (!coordinate) return;
+    event.preventDefault?.();
+    manualStrokeRef.current = extendManualStrokeCapture(
+      manualStrokeRef.current,
+      coordinate,
+    );
+  };
+  const handleManualStrokeEnd = (event: any) => {
+    if (!manualStrokeRef.current.active) return;
+    event.preventDefault?.();
+    const ended = endManualStrokeCapture(manualStrokeRef.current);
+    manualStrokeRef.current = ended.capture;
+    if (ended.stroke.length)
+      (onMapStroke ?? ((stroke: Coordinate[]) => onMapPress(stroke[0])))(
+        ended.stroke,
+      );
+  };
+  const handleManualStrokeCancel = (event: any) => {
+    if (!manualStrokeRef.current.active) return;
+    event.preventDefault?.();
+    manualStrokeRef.current = cancelManualStrokeCapture(
+      manualStrokeRef.current,
+    );
+  };
+  const manualStrokeSurfaceProps = {
+    onTouchStart: handleManualStrokeStart,
+    onTouchMove: handleManualStrokeMove,
+    onTouchEnd: handleManualStrokeEnd,
+    onTouchCancel: handleManualStrokeCancel,
+    onPointerDown: handleManualStrokeStart,
+    onPointerMove: handleManualStrokeMove,
+    onPointerUp: handleManualStrokeEnd,
+    onPointerCancel: handleManualStrokeCancel,
+  } as any;
   const confirmMapPoint = () => {
     if (!pendingMapPoint) return;
     const nextStart =
@@ -400,13 +500,21 @@ export function RoutesScreen({
       <View
         style={[styles.screen, styles.manualScreen, rtl && styles.screenRtl]}
       >
-        <View style={styles.manualMapViewport}>
+        <View
+          style={[styles.manualMapViewport, { position: "relative" }]}
+          onLayout={(event) =>
+            setManualMapSize({
+              width: event.nativeEvent.layout.width,
+              height: event.nativeEvent.layout.height,
+            })
+          }
+        >
           {manualMapRoute ? (
             <MapPreview
               route={asCanonicalRoute(manualMapRoute)!}
               fullScreen
               rtl={rtl}
-              onMapPress={handleMapPress}
+              onMapPress={undefined}
               roadLabels={roadLabels}
               mapText={{
                 ...mapText,
@@ -420,9 +528,37 @@ export function RoutesScreen({
                   manualMatchStatus === "failed"
                     ? tx(t, "routeUnavailable", "Road match unavailable")
                     : tx(t, "straightLine", "Straight line"),
+                gestures: rtl
+                  ? "المس الخريطة واسحب لرسم خط؛ ارفع إصبعك لإنهاء الرسم."
+                  : "Touch or drag across the map to draw a stroke; lift to finish.",
+                mapHint: rtl
+                  ? "ارسم على الخريطة بإصبعك؛ ينتهي الخط عند رفع الإصبع."
+                  : "Draw on the map with a finger or pointer; the stroke ends when you lift.",
               }}
             />
           ) : null}
+          <View
+            testID="manual-stroke-surface"
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={
+              rtl ? "سطح رسم المسار" : "Route drawing surface"
+            }
+            accessibilityHint={
+              rtl
+                ? "المس الخريطة واسحب لرسم خط؛ ارفع إصبعك لإنهاء الخط."
+                : "Touch or drag across the map; lift to finish the stroke."
+            }
+            pointerEvents="box-only"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              left: 0,
+            }}
+            {...manualStrokeSurfaceProps}
+          />
         </View>
         <ScrollView
           style={styles.manualControlTray}
@@ -1107,8 +1243,8 @@ function ManualSketchReviewPanel({
   const sketchCopy =
     manualMatchStatus === "ready"
       ? rtl
-        ? "تم التحقق من الرسم مقابل الطرق المرسومة؛ وسيبقى الاستخدام خطة غير ملاحية."
-        : "This sketch was checked against mapped roads; Use remains a non-navigation plan."
+        ? "اكتمل التحقق من الطرق. يفتح الاستخدام الخطة للمراجعة أولاً؛ ولا يبدأ الركوب إلا من إجراء الركوب الصريح."
+        : "The road check is complete. Use opens the reviewed plan first; starting Ride still requires the separate Ride action."
       : manualMatchStatus === "matching"
         ? rtl
           ? "جارٍ التحقق من الرسم مقابل الطرق؛ تبقى النقاط قابلة للتعديل."
@@ -1176,7 +1312,13 @@ function ManualSketchReviewPanel({
       )}
       <Pressable accessibilityRole="button" onPress={onUse} style={styles.primary}>
         <Text style={styles.primaryText}>
-          {rtl ? "استخدم كخطة غير ملاحية" : "Use as a non-navigation plan"}
+          {manualMatchStatus === "ready"
+            ? rtl
+              ? "استخدم الخطة للمراجعة"
+              : "Use as a reviewed plan"
+            : rtl
+              ? "استخدم كخطة غير ملاحية"
+              : "Use as a non-navigation plan"}
         </Text>
       </Pressable>
       <Pressable accessibilityRole="button" onPress={onSave} style={styles.secondary}>
@@ -1483,7 +1625,9 @@ function LocationField({
           <View style={styles.statusDot} />
           <View style={styles.routeRowCopy}>
             <Text style={[styles.fieldLabel, rtl && styles.textRight]}>
-              {rtl ? "نقطة مختارة" : "Selected point"}: {committedPoint.name}
+              {rtl ? "نقطة مختارة" : "Selected point"}: {rtl
+                ? committedPoint.nameAr ?? committedPoint.name
+                : committedPoint.name}
             </Text>
             <Text style={[styles.fieldHint, rtl && styles.textRight]}>
               {textIsCommitted
@@ -1548,7 +1692,9 @@ function SavedPointChoices({
           onPress={() => onUse(field, point)}
           style={styles.smallButton}
         >
-          <Text style={styles.smallButtonText}>{point.name}</Text>
+          <Text style={styles.smallButtonText}>
+            {rtl && point.nameAr ? point.nameAr : point.name}
+          </Text>
         </Pressable>
       ))}
     </View>
@@ -1847,8 +1993,8 @@ function ManualPanel({
   const sketchCopy =
     manualMatchStatus === "ready"
       ? rtl
-        ? "تم التحقق من الرسم مقابل الطرق المرسومة؛ وسيبقى الاستخدام خطة غير ملاحية."
-        : "This sketch was checked against mapped roads; Use remains a non-navigation plan."
+        ? "اكتمل التحقق من الطرق. يفتح الاستخدام الخطة للمراجعة أولاً؛ ولا يبدأ الركوب إلا من إجراء الركوب الصريح."
+        : "The road check is complete. Use opens the reviewed plan first; starting Ride still requires the separate Ride action."
       : manualMatchStatus === "matching"
         ? rtl
           ? "جارٍ التحقق من الرسم مقابل الطرق؛ تبقى النقاط قابلة للتعديل."
@@ -1891,8 +2037,8 @@ function ManualPanel({
       {manualMatchStatus === "ready" && (
         <Text style={[styles.fieldHint, rtl && styles.textRight]}>
           {rtl
-            ? "تم التحقق من مطابقة المسار للطرق."
-            : "Road check complete; the matched result is retained."}
+            ? "تم التحقق من مطابقة المسار للطرق؛ ويبقى إجراء الركوب منفصلاً وصريحاً."
+            : "Road check complete; the matched result is retained and Ride remains a separate explicit action."}
         </Text>
       )}
       {manualMatchStatus === "failed" && manualMatchError && (

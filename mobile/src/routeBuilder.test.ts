@@ -62,12 +62,12 @@ test('route builder keeps private-pilot routes inside Bahrain and within review 
   assert.equal(routeFromCoordinates('too-far', 'Too far', [{ latitude: 26.1, longitude: 50.5 }, { latitude: 26.5, longitude: 50.5 }]), null);
 });
 
-test('typed endpoint text stays uncommitted while the previously selected point is retained', () => {
+test('typed endpoint text clears the committed point until it is explicitly recommitted', () => {
   const empty = createPlannerInputState();
   const selectedStart = commitPlannerPoint(empty, 'start', start);
   const edited = updatePlannerTextState(selectedStart, 'start', 'Seef pier');
 
-  assert.deepEqual(edited.start, start);
+  assert.equal(edited.start, null);
   assert.equal(edited.startText, 'Seef pier');
   assert.equal(plannerEndpointIsCommitted(edited, 'start'), false);
   assert.equal(plannerInputCanMatch(edited), false);
@@ -77,6 +77,35 @@ test('typed endpoint text stays uncommitted while the previously selected point 
   const committedDestination = commitPlannerPoint(recommittedStart, 'destination', destination);
   assert.equal(plannerInputCanMatch(committedDestination), true);
   assert.equal(committedDestination.suggestionsOpen, null);
+});
+
+test('planner match preparation rejects stale text and accepts a confirmed map point', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.preparePlannerMatch, 'function');
+  const selected = builder.commitPlannerPoint(
+    builder.commitPlannerPoint(builder.createPlannerInputState(), 'start', start),
+    'destination',
+    destination,
+  );
+  const edited = builder.updatePlannerTextState(selected, 'start', 'Typed place');
+  const rejected = builder.preparePlannerMatch(edited);
+  assert.equal(rejected.ok, false);
+  if (rejected.ok) throw new Error('Expected stale endpoint rejection');
+  assert.equal(rejected.error, 'emptyStart');
+
+  const recommitted = builder.commitPlannerPoint(edited, 'start', {
+    ...start,
+    name: 'Map start',
+    nameAr: 'البداية',
+  });
+  const accepted = builder.preparePlannerMatch(recommitted, [
+    recommitted.start!,
+    recommitted.destination!,
+  ]);
+  assert.equal(accepted.ok, true);
+  if (!accepted.ok) throw new Error('Expected confirmed endpoint match');
+  assert.equal(accepted.points.length, 2);
+  assert.equal(accepted.points[0].nameAr, 'البداية');
 });
 
 test('planner validation rejects empty and identical endpoints before routing', () => {
@@ -177,4 +206,90 @@ test('undo and redo operate on complete manual strokes', async () => {
   assert.deepEqual(builder.manualSketchCoordinates(state), firstStroke);
   state = builder.redoManualStroke(state);
   assert.deepEqual(builder.manualSketchCoordinates(state), [...firstStroke, ...secondStroke]);
+});
+
+test('pointer/touch stroke capture collects ordered movement and ends on lift', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.beginManualStrokeCapture, 'function');
+  const first = { latitude: 26.24, longitude: 50.53 };
+  const second = { latitude: 26.235, longitude: 50.535 };
+  const third = { latitude: 26.23, longitude: 50.54 };
+  let capture = builder.beginManualStrokeCapture(first);
+  capture = builder.extendManualStrokeCapture(capture, second);
+  capture = builder.extendManualStrokeCapture(capture, third);
+  const ended = builder.endManualStrokeCapture(capture);
+
+  assert.deepEqual(ended.stroke, [first, second, third]);
+  assert.equal(ended.capture.active, false);
+  assert.deepEqual(builder.extendManualStrokeCapture(ended.capture, first).points, []);
+});
+
+test('manual map surface points stay inside the supplied geographic bounds', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.coordinateFromMapSurface, 'function');
+  const coordinate = builder.coordinateFromMapSurface(
+    { x: 100, y: 25 },
+    { width: 200, height: 100 },
+    {
+      center: { latitude: 26.2, longitude: 50.5 },
+      latitudeDelta: 0.2,
+      longitudeDelta: 0.4,
+    },
+  );
+
+  assert.deepEqual(coordinate, { latitude: 26.25, longitude: 50.5 });
+});
+
+test('manual routing artifacts retain raw points separately from simplified payload', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.createManualSketchMatchArtifact, 'function');
+  const rawPoints = Array.from({ length: 60 }, (_, index) => ({
+    latitude: 26.1 + index * 0.001,
+    longitude: 50.5 + Math.sin(index / 2) * 0.001,
+  }));
+  const artifact = builder.createManualSketchMatchArtifact(rawPoints, 12);
+
+  assert.deepEqual(artifact.rawPoints, rawPoints);
+  assert.ok(artifact.routingPoints.length <= 12);
+  assert.notEqual(artifact.rawPoints, artifact.routingPoints);
+  assert.deepEqual(artifact.routingPoints[0], rawPoints[0]);
+  assert.deepEqual(artifact.routingPoints.at(-1), rawPoints.at(-1));
+});
+
+test('move and remove preserve manual stroke boundaries', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.moveManualPointInSketch, 'function');
+  const a = { latitude: 26.24, longitude: 50.53 };
+  const b = { latitude: 26.23, longitude: 50.54 };
+  const c = { latitude: 26.22, longitude: 50.55 };
+  const d = { latitude: 26.21, longitude: 50.56 };
+  let state = builder.createManualSketchState();
+  state = builder.appendManualStroke(state, [a, b]);
+  state = builder.appendManualStroke(state, [c, d]);
+
+  const moved = builder.moveManualPointInSketch(state, 1, 1);
+  assert.deepEqual(moved.strokes, [[a, c], [b, d]]);
+  const removed = builder.removeManualPointFromSketch(moved, 0);
+  assert.deepEqual(removed.strokes, [[c], [b, d]]);
+  assert.deepEqual(removed.redo, []);
+});
+
+test('manual match session invalidation makes a late result stale', async () => {
+  const builder = await import('./routeBuilder');
+  assert.equal(typeof builder.createManualMatchSession, 'function');
+  const raw = [
+    { latitude: 26.24, longitude: 50.53 },
+    { latitude: 26.23, longitude: 50.54 },
+  ];
+  const session = builder.createManualMatchSession(raw);
+  const matching = builder.beginManualMatchSession(session, raw, [raw[0], raw[1]]);
+  const edited = builder.invalidateManualMatchSession(matching, [
+    ...raw,
+    { latitude: 26.22, longitude: 50.55 },
+  ]);
+
+  assert.equal(builder.manualMatchSessionIsCurrent(matching, matching.revision), true);
+  assert.equal(builder.manualMatchSessionIsCurrent(edited, matching.revision), false);
+  assert.equal(edited.status, 'draft');
+  assert.equal(edited.rawPoints.length, 3);
 });

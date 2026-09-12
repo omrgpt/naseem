@@ -47,9 +47,28 @@ export function updatePlannerTextState(
   field: PlannerField,
   value: string,
 ): PlannerInputState {
+  const currentPoint = field === 'start' ? state.start : state.destination;
+  const textMatchesPoint = Boolean(
+    currentPoint &&
+      (value.trim() === currentPoint.name.trim() ||
+        value.trim() === currentPoint.nameAr?.trim()),
+  );
+  const nextPoint = textMatchesPoint ? currentPoint : null;
   return field === 'start'
-    ? { ...state, startText: value, activeField: field, suggestionsOpen: field }
-    : { ...state, destinationText: value, activeField: field, suggestionsOpen: field };
+    ? {
+        ...state,
+        startText: value,
+        start: nextPoint,
+        activeField: field,
+        suggestionsOpen: field,
+      }
+    : {
+        ...state,
+        destinationText: value,
+        destination: nextPoint,
+        activeField: field,
+        suggestionsOpen: field,
+      };
 }
 
 export function commitPlannerPoint(
@@ -114,6 +133,74 @@ export function validatePlannerInput(state: PlannerInputState): PlannerValidatio
 
 export function plannerInputCanMatch(state: PlannerInputState): boolean {
   return validatePlannerInput(state) === null;
+}
+
+export type PlannerMatchPreparation =
+  | {
+      ok: true;
+      start: PlannerPoint;
+      destination: PlannerPoint;
+      points: PlannerPoint[];
+    }
+  | {
+      ok: false;
+      error: Exclude<PlannerValidationError, null>;
+    };
+
+/** Prepare the exact committed input that the App is allowed to send to routing. */
+export function preparePlannerMatch(
+  state: PlannerInputState,
+  orderedPoints: readonly PlannerPoint[] = [state.start, state.destination].filter(
+    (point): point is PlannerPoint => Boolean(point),
+  ),
+): PlannerMatchPreparation {
+  const error = validatePlannerInput(state);
+  if (error) return { ok: false, error };
+  const start = state.start!;
+  const destination = state.destination!;
+  const points = [...orderedPoints];
+  if (!points.length || !sameCoordinate(points[0], start))
+    return { ok: false, error: 'invalidStart' };
+  if (points.length < 2 || !sameCoordinate(points.at(-1)!, destination))
+    return { ok: false, error: 'invalidDestination' };
+  return { ok: true, start, destination, points };
+}
+
+export type MapSurfaceBounds = {
+  center: Coordinate;
+  latitudeDelta: number;
+  longitudeDelta: number;
+};
+
+/** Convert a touch/pointer position in the editor surface into a map point. */
+export function coordinateFromMapSurface(
+  point: { x: number; y: number },
+  size: { width: number; height: number },
+  bounds: MapSurfaceBounds,
+): Coordinate | null {
+  if (
+    !Number.isFinite(point.x) ||
+    !Number.isFinite(point.y) ||
+    !Number.isFinite(size.width) ||
+    !Number.isFinite(size.height) ||
+    size.width <= 0 ||
+    size.height <= 0 ||
+    !Number.isFinite(bounds.center.latitude) ||
+    !Number.isFinite(bounds.center.longitude) ||
+    !Number.isFinite(bounds.latitudeDelta) ||
+    !Number.isFinite(bounds.longitudeDelta) ||
+    bounds.latitudeDelta <= 0 ||
+    bounds.longitudeDelta <= 0
+  )
+    return null;
+  const normalizedX = Math.max(0, Math.min(1, point.x / size.width));
+  const normalizedY = Math.max(0, Math.min(1, point.y / size.height));
+  return {
+    latitude:
+      bounds.center.latitude + (0.5 - normalizedY) * bounds.latitudeDelta,
+    longitude:
+      bounds.center.longitude + (normalizedX - 0.5) * bounds.longitudeDelta,
+  };
 }
 
 const plannerValidationMessages = {
@@ -209,6 +296,47 @@ export type ManualSketchState = {
   redo: ManualStroke[];
 };
 
+export type ManualStrokeCaptureState = {
+  active: boolean;
+  points: Coordinate[];
+};
+
+export type ManualStrokeCaptureResult = {
+  capture: ManualStrokeCaptureState;
+  stroke: Coordinate[];
+};
+
+export function beginManualStrokeCapture(
+  coordinate: Coordinate,
+): ManualStrokeCaptureState {
+  const points = normalizeCoordinates([coordinate]);
+  return { active: points.length > 0, points };
+}
+
+export function extendManualStrokeCapture(
+  capture: ManualStrokeCaptureState,
+  coordinate: Coordinate,
+): ManualStrokeCaptureState {
+  if (!capture.active) return cloneManualStrokeCapture(capture);
+  const points = normalizeCoordinates([...capture.points, coordinate]);
+  return { active: true, points };
+}
+
+export function endManualStrokeCapture(
+  capture: ManualStrokeCaptureState,
+): ManualStrokeCaptureResult {
+  return {
+    capture: { active: false, points: [] },
+    stroke: normalizeCoordinates(capture.points),
+  };
+}
+
+export function cancelManualStrokeCapture(
+  capture: ManualStrokeCaptureState,
+): ManualStrokeCaptureState {
+  return { active: false, points: [] };
+}
+
 export function createManualSketchState(
   strokes: readonly Coordinate[][] = [],
 ): ManualSketchState {
@@ -265,6 +393,130 @@ export function clearManualSketch(state: ManualSketchState): ManualSketchState {
 
 export function manualSketchCoordinates(state: ManualSketchState): Coordinate[] {
   return normalizeCoordinates(state.strokes.flatMap((stroke) => stroke));
+}
+
+function manualPointLocation(
+  state: ManualSketchState,
+  index: number,
+): { strokeIndex: number; pointIndex: number } | null {
+  if (!Number.isInteger(index) || index < 0) return null;
+  let offset = 0;
+  for (let strokeIndex = 0; strokeIndex < state.strokes.length; strokeIndex += 1) {
+    const stroke = state.strokes[strokeIndex];
+    if (index < offset + stroke.length)
+      return { strokeIndex, pointIndex: index - offset };
+    offset += stroke.length;
+  }
+  return null;
+}
+
+/** Remove a point without flattening the remaining stroke boundaries. */
+export function removeManualPointFromSketch(
+  state: ManualSketchState,
+  index: number,
+): ManualSketchState {
+  const location = manualPointLocation(state, index);
+  if (!location) return cloneManualSketchState(state);
+  const strokes = state.strokes.map((stroke) => [...stroke]);
+  strokes[location.strokeIndex].splice(location.pointIndex, 1);
+  return {
+    strokes: strokes.filter((stroke) => stroke.length > 0),
+    redo: [],
+  };
+}
+
+/** Move one displayed point while retaining every original stroke partition. */
+export function moveManualPointInSketch(
+  state: ManualSketchState,
+  index: number,
+  direction: -1 | 1,
+): ManualSketchState {
+  const location = manualPointLocation(state, index);
+  const target = manualPointLocation(state, index + direction);
+  if (!location || !target) return cloneManualSketchState(state);
+  const strokes = state.strokes.map((stroke) => [...stroke]);
+  const current = strokes[location.strokeIndex][location.pointIndex];
+  strokes[location.strokeIndex][location.pointIndex] =
+    strokes[target.strokeIndex][target.pointIndex];
+  strokes[target.strokeIndex][target.pointIndex] = current;
+  return { strokes, redo: [] };
+}
+
+export type ManualSketchMatchArtifact = {
+  rawPoints: Coordinate[];
+  routingPoints: Coordinate[];
+};
+
+/** Keep the drawn artifact and the bounded provider payload as separate values. */
+export function createManualSketchMatchArtifact(
+  coordinates: Coordinate[],
+  maxRoutingPoints = 25,
+): ManualSketchMatchArtifact {
+  const rawPoints = normalizeCoordinates(coordinates);
+  return {
+    rawPoints,
+    routingPoints: simplifyCoordinatesForRouting(rawPoints, maxRoutingPoints),
+  };
+}
+
+export type ManualMatchSessionStatus = 'draft' | 'matching' | 'ready' | 'failed';
+export type ManualMatchSession = {
+  revision: number;
+  status: ManualMatchSessionStatus;
+  rawPoints: Coordinate[];
+  routingPoints: Coordinate[];
+};
+
+export function createManualMatchSession(
+  rawPoints: Coordinate[] = [],
+): ManualMatchSession {
+  return {
+    revision: 0,
+    status: 'draft',
+    rawPoints: normalizeCoordinates(rawPoints),
+    routingPoints: [],
+  };
+}
+
+export function beginManualMatchSession(
+  session: ManualMatchSession,
+  rawPoints: Coordinate[],
+  routingPoints: Coordinate[],
+): ManualMatchSession {
+  return {
+    revision: session.revision + 1,
+    status: 'matching',
+    rawPoints: normalizeCoordinates(rawPoints),
+    routingPoints: normalizeCoordinates(routingPoints),
+  };
+}
+
+export function invalidateManualMatchSession(
+  session: ManualMatchSession,
+  rawPoints: Coordinate[],
+): ManualMatchSession {
+  return {
+    revision: session.revision + 1,
+    status: 'draft',
+    rawPoints: normalizeCoordinates(rawPoints),
+    routingPoints: [],
+  };
+}
+
+export function manualMatchSessionIsCurrent(
+  session: ManualMatchSession,
+  revision: number,
+): boolean {
+  return session.status === 'matching' && session.revision === revision;
+}
+
+export function finishManualMatchSession(
+  session: ManualMatchSession,
+  revision: number,
+  status: Exclude<ManualMatchSessionStatus, 'matching'>,
+): ManualMatchSession | null {
+  if (!manualMatchSessionIsCurrent(session, revision)) return null;
+  return { ...session, status };
 }
 
 /** Cap a freehand request for routing while preserving the user-visible ends. */
@@ -391,6 +643,12 @@ function cloneManualSketchState(state: ManualSketchState): ManualSketchState {
   };
 }
 
+function cloneManualStrokeCapture(
+  capture: ManualStrokeCaptureState,
+): ManualStrokeCaptureState {
+  return { active: capture.active, points: [...capture.points] };
+}
+
 function simplifyCoordinates(points: Coordinate[], tolerance: number): Coordinate[] {
   if (points.length <= 2) return points;
   const keep = new Uint8Array(points.length);
@@ -421,6 +679,9 @@ function perpendicularDistance(point: Coordinate, start: Coordinate, end: Coordi
   const dy = end.latitude - start.latitude;
   if (dx === 0 && dy === 0) return Math.hypot(point.longitude - start.longitude, point.latitude - start.latitude);
   return Math.abs(dy * point.longitude - dx * point.latitude + end.longitude * start.latitude - end.latitude * start.longitude) / Math.hypot(dx, dy);
+}
+function sameCoordinate(first: Coordinate, second: Coordinate) {
+  return first.latitude === second.latitude && first.longitude === second.longitude;
 }
 function isBahrainCoordinate(coordinate: Coordinate) { return coordinate.latitude >= BAHRAIN_BOUNDS.minLatitude && coordinate.latitude <= BAHRAIN_BOUNDS.maxLatitude && coordinate.longitude >= BAHRAIN_BOUNDS.minLongitude && coordinate.longitude <= BAHRAIN_BOUNDS.maxLongitude; }
 

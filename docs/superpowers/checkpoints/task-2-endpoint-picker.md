@@ -1,6 +1,34 @@
 # Task 2 — Real endpoint picker and manual sketch road-check state
 
-Status: `COMPLETE`
+Status: `IN PROGRESS`
+
+## Review follow-up fix round
+
+- Exact worktree: `C:\\Users\\PC\\Documents\\ChatGPT\\Bike\\.worktrees\\naseem-release-fixes`
+- Branch: `codex/naseem-release-fixes`
+- Owned product/test files: `mobile/App.tsx`,
+  `mobile/src/screens/RoutesScreen.tsx`, `mobile/src/routeBuilder.ts`,
+  `mobile/src/routeLifecycle.ts` only if the existing transition seam requires
+  it, `mobile/src/routeBuilder.test.ts`, and
+  `mobile/src/appIntegration.test.ts`.
+- Owned evidence files: this checkpoint and
+  `.superpowers/sdd/2026-09-12-release-continuation/task-2-report.md`.
+- Intended tests: focused route-builder/App runtime transitions, full mobile
+  suite, typecheck, committed and working-tree `git diff --check`, and English
+  plus Arabic browser checks. No native-runtime claim.
+- Resume step: add the failing endpoint, stroke-capture, invalidation,
+  artifact-retention, stroke-history, runtime-transition, Arabic, and copy
+  tests; run focused RED; then implement the smallest green changes.
+
+## Fix round RED evidence
+
+- Focused command: `npx.cmd tsx --test src/routeBuilder.test.ts src/appIntegration.test.ts`
+- Result: **RED** — 34 tests executed, 27 passed, 7 failed.
+- Expected failures: stale typed endpoint still retained its coordinate;
+  `preparePlannerMatch`, pointer/touch stroke capture, raw-vs-routing artifact,
+  stroke-preserving move/remove, and manual match-session invalidation seams
+  were not yet implemented. The runtime integration test failed first because
+  `preparePlannerMatch` was not exported.
 
 ## Worktree and branch
 
@@ -67,3 +95,18 @@ untracked files were not staged or changed.
 - Resume by running the Expo SDK 57 app on an actual phone, exercising both
   mapped-road success and failure retention, then continue with the next
   release-continuation task.
+
+## Independent review gate
+
+- Review status: **BLOCKED — NOT APPROVED**.
+- Review report: `.superpowers/sdd/2026-09-12-release-continuation/task-2-review-report.md`.
+- Review checkpoint: `docs/superpowers/checkpoints/task-2-endpoint-picker-review.md`.
+- Verified blockers: stale typed endpoints can still be matched; the current
+  map path creates one-point strokes rather than capturing freehand movement;
+  manual edits do not cancel in-flight matching; simplified routing points can
+  replace the retained artifact; move/remove flatten stroke history; and the
+  critical integration tests are source-regex checks.
+- Minor follow-ups: Arabic endpoint labels and non-navigation copy clarity.
+- Resume by using the original Task 2 agent’s saved context and the durable
+  follow-up brief at
+  `.superpowers/sdd/2026-09-12-release-continuation/task-2-fix-brief.md`.
